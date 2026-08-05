@@ -1,23 +1,31 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { Link, createFileRoute } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import {
   ArrowRight,
   BadgeCheck,
   CheckCircle2,
   Clock,
   FileCheck,
+  LockKeyhole,
   MapPin,
-  Phone,
   ShieldCheck,
   Snowflake,
   Users,
   Wrench,
 } from "lucide-react";
 import logo from "@/assets/01transportes-logo.svg";
-import heroBus from "@/assets/hero-bus.jpg";
 import vehicleVan from "@/assets/vehicle-van.jpg";
 import vehicleMicrobus from "@/assets/vehicle-microbus.jpg";
 import vehicleBus from "@/assets/vehicle-bus.jpg";
 import maintenance from "@/assets/maintenance.jpg";
+import {
+  availabilityLabel,
+  getCatalogImageUrls,
+  operationModeLabel,
+  type CatalogVehicle,
+  type CatalogVehicleImage,
+} from "@/lib/catalog";
+import { supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -39,52 +47,177 @@ export const Route = createFileRoute("/")({
 });
 
 const WA_NUMBER = "5511999999999";
-const waLink = (msg: string) =>
-  `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
+const waLink = (msg: string) => `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
 
 type Vehicle = {
+  id: string;
   name: string;
   category: string;
+  description: string;
   capacity: string;
   equipment: string[];
-  status: "Disponível" | "Sob consulta";
-  mode: "Locação" | "Venda" | "Locação e venda";
+  status: string;
+  mode: string;
+  price: string | null;
+  airConditioned: boolean;
+  location: string | null;
+  year: number | null;
   image: string;
   alt: string;
 };
 
-const vehicles: Vehicle[] = [
+const fallbackVehicles: Vehicle[] = [
   {
+    id: "micro-onibus-escolar",
     name: "Micro-ônibus escolar",
     category: "Transporte escolar",
+    description: "Veículo preparado para rotas escolares, com documentação e revisão em dia.",
     capacity: "24 passageiros",
     equipment: ["Cintos individuais", "Ar-condicionado", "Documentação escolar"],
     status: "Disponível",
     mode: "Locação",
+    price: null,
+    airConditioned: true,
+    location: "Grande São Paulo",
+    year: null,
     image: vehicleMicrobus,
     alt: "Micro-ônibus escolar amarelo estacionado em rua urbana",
   },
   {
+    id: "van-executiva",
     name: "Van executiva",
     category: "Fretamento",
+    description: "Conforto e espaço para traslados corporativos, eventos e viagens em grupo.",
     capacity: "15 passageiros",
     equipment: ["Ar-condicionado", "Bancos reclináveis", "Porta-malas amplo"],
     status: "Disponível",
     mode: "Locação e venda",
+    price: null,
+    airConditioned: true,
+    location: "Grande São Paulo",
+    year: null,
     image: vehicleVan,
     alt: "Van branca estacionada em pátio de empresa de transporte",
   },
   {
+    id: "onibus-escolar",
     name: "Ônibus escolar",
     category: "Transporte escolar",
+    description:
+      "Ônibus para operações escolares ou institucionais, sujeito à confirmação comercial.",
     capacity: "42 passageiros",
     equipment: ["Revisão em dia", "Vistoria DETRAN", "Motorista habilitado"],
     status: "Sob consulta",
     mode: "Venda",
+    price: null,
+    airConditioned: true,
+    location: "Grande São Paulo",
+    year: null,
     image: vehicleBus,
     alt: "Ônibus escolar amarelo estacionado em terminal",
   },
 ];
+
+type CatalogVehicleWithImages = CatalogVehicle & {
+  catalog_vehicle_images: CatalogVehicleImage[];
+};
+
+function getCatalogFallbackFeatures(vehicle: CatalogVehicle) {
+  return [
+    vehicle.brand && vehicle.model
+      ? `${vehicle.brand} ${vehicle.model}`
+      : (vehicle.model ?? vehicle.brand),
+    vehicle.manufactured_year ? `Ano ${vehicle.manufactured_year}` : null,
+    vehicle.location,
+  ].filter((value): value is string => Boolean(value));
+}
+
+function formatCatalogPrice(priceCents: number | null) {
+  if (priceCents === null) return null;
+
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: 0,
+  }).format(priceCents / 100);
+}
+
+function toDisplayVehicle(
+  vehicle: CatalogVehicleWithImages,
+  imageUrls: Record<string, string>,
+): Vehicle {
+  const images = [...(vehicle.catalog_vehicle_images ?? [])].sort(
+    (first, second) => first.sort_order - second.sort_order,
+  );
+  const primaryImage = images[0];
+  const features =
+    vehicle.features.length > 0 ? vehicle.features : getCatalogFallbackFeatures(vehicle);
+
+  return {
+    id: vehicle.id,
+    name: vehicle.title,
+    category: vehicle.category,
+    description: vehicle.description,
+    capacity: vehicle.passenger_capacity
+      ? `${vehicle.passenger_capacity} passageiros`
+      : "Capacidade sob consulta",
+    equipment: features.length > 0 ? features : ["Detalhes disponíveis sob consulta"],
+    status: availabilityLabel[vehicle.availability],
+    mode: operationModeLabel[vehicle.operation_mode],
+    price: formatCatalogPrice(vehicle.price_cents),
+    airConditioned: vehicle.air_conditioned,
+    location: vehicle.location,
+    year: vehicle.manufactured_year,
+    image: primaryImage ? (imageUrls[primaryImage.path] ?? vehicleBus) : vehicleBus,
+    alt: primaryImage?.alt_text ?? vehicle.title,
+  };
+}
+
+function usePublishedVehicles() {
+  const [vehicles, setVehicles] = useState<Vehicle[]>(fallbackVehicles);
+
+  useEffect(() => {
+    const client = supabase;
+    if (!client) return;
+    const catalogClient = client;
+
+    let cancelled = false;
+
+    async function loadVehicles() {
+      const { data, error } = await catalogClient
+        .from("catalog_vehicles")
+        .select("*, catalog_vehicle_images(*)")
+        .not("published_at", "is", null)
+        .order("is_featured", { ascending: false })
+        .order("sort_order", { ascending: true })
+        .order("published_at", { ascending: false });
+
+      if (error || !data || data.length === 0) {
+        if (error) console.error("Não foi possível carregar o catálogo.", error);
+        return;
+      }
+
+      const catalogVehicles = data as CatalogVehicleWithImages[];
+      const imageUrls = await getCatalogImageUrls(
+        catalogVehicles.flatMap((vehicle) =>
+          (vehicle.catalog_vehicle_images ?? []).map((image) => image.path),
+        ),
+      );
+
+      if (!cancelled) {
+        setVehicles(catalogVehicles.map((vehicle) => toDisplayVehicle(vehicle, imageUrls)));
+      }
+    }
+
+    void loadVehicles();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  return vehicles;
+}
 
 const services = [
   {
@@ -113,20 +246,189 @@ const trust = [
 
 function WhatsAppIcon({ className }: { className?: string }) {
   return (
-    <svg
-      viewBox="0 0 24 24"
-      aria-hidden="true"
-      className={className}
-      fill="currentColor"
-    >
+    <svg viewBox="0 0 24 24" aria-hidden="true" className={className} fill="currentColor">
       <path d="M17.5 14.4c-.3-.1-1.7-.8-1.9-.9-.3-.1-.4-.1-.6.1-.2.3-.7.9-.8 1.1-.2.2-.3.2-.5.1-.3-.1-1.2-.4-2.2-1.3-.8-.7-1.4-1.6-1.5-1.9-.2-.3 0-.4.1-.6.1-.1.3-.3.4-.5.1-.2.2-.3.3-.5.1-.2 0-.3 0-.5s-.6-1.5-.9-2c-.2-.5-.5-.5-.6-.5H8.7c-.2 0-.5.1-.8.4-.3.3-1 1-1 2.5s1 2.9 1.2 3.1c.1.2 2 3 4.8 4.2.7.3 1.2.5 1.6.6.7.2 1.3.2 1.8.1.6-.1 1.7-.7 1.9-1.4.2-.7.2-1.3.2-1.4 0-.1-.2-.2-.4-.3zM12 2C6.5 2 2 6.5 2 12c0 1.9.5 3.7 1.5 5.3L2 22l4.9-1.5C8.4 21.5 10.2 22 12 22c5.5 0 10-4.5 10-10S17.5 2 12 2zm0 18c-1.7 0-3.3-.5-4.7-1.3l-.3-.2-3 .9.9-2.9-.2-.3C3.8 15 3.2 13.5 3.2 12 3.2 7.1 7.1 3.2 12 3.2S20.8 7.1 20.8 12 16.9 20 12 20z" />
     </svg>
   );
 }
 
+function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
+  const [modeFilter, setModeFilter] = useState("ALL");
+  const [categoryFilter, setCategoryFilter] = useState("ALL");
+  const categories = useMemo(
+    () => [...new Set(vehicles.map((vehicle) => vehicle.category))].sort(),
+    [vehicles],
+  );
+  const filteredVehicles = useMemo(
+    () =>
+      vehicles.filter(
+        (vehicle) =>
+          (modeFilter === "ALL" || vehicle.mode.includes(modeFilter)) &&
+          (categoryFilter === "ALL" || vehicle.category === categoryFilter),
+      ),
+    [categoryFilter, modeFilter, vehicles],
+  );
+
+  return (
+    <section id="frota" className="border-b border-border bg-surface">
+      <div className="container-page py-10 md:py-14">
+        <div className="flex flex-wrap items-end justify-between gap-5">
+          <div>
+            <p className="text-sm font-semibold text-primary">Catálogo 01 Transportes</p>
+            <h2 className="mt-2 text-3xl font-extrabold text-primary md:text-4xl">
+              Escolha o veículo para a sua operação.
+            </h2>
+            <p className="mt-3 max-w-xl text-muted-foreground">
+              Compare a frota, veja os detalhes e peça uma proposta de locação ou compra direto com
+              a equipe.
+            </p>
+          </div>
+          <a
+            href={waLink("Olá! Quero ver a disponibilidade atual da frota.")}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-sm font-semibold text-primary underline-offset-4 hover:underline"
+          >
+            Consultar disponibilidade →
+          </a>
+        </div>
+
+        <div className="mt-8 flex flex-col gap-4 border-y border-border py-4 sm:flex-row sm:items-end sm:justify-between">
+          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+            <label className="grid gap-1.5 text-sm">
+              <span className="font-medium text-foreground">Modalidade</span>
+              <select
+                value={modeFilter}
+                onChange={(event) => setModeFilter(event.target.value)}
+                className="h-10 min-w-40 border border-input bg-background px-3 text-sm"
+              >
+                <option value="ALL">Todas</option>
+                <option value="Locação">Locação</option>
+                <option value="Venda">Venda</option>
+              </select>
+            </label>
+            <label className="grid gap-1.5 text-sm">
+              <span className="font-medium text-foreground">Categoria</span>
+              <select
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+                className="h-10 min-w-48 border border-input bg-background px-3 text-sm"
+              >
+                <option value="ALL">Todas</option>
+                {categories.map((category) => (
+                  <option key={category} value={category}>
+                    {category}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+          <p className="text-sm text-muted-foreground" aria-live="polite">
+            {filteredVehicles.length} {filteredVehicles.length === 1 ? "veículo" : "veículos"}
+          </p>
+        </div>
+
+        {filteredVehicles.length === 0 ? (
+          <div className="border border-dashed border-border bg-card px-5 py-12 text-center">
+            <p className="font-semibold text-foreground">Nenhum veículo encontrado.</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Ajuste os filtros ou fale com a equipe para consultar outras opções.
+            </p>
+          </div>
+        ) : (
+          <div className="mt-6 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
+            {filteredVehicles.map((v) => (
+              <article
+                key={v.id}
+                className="flex flex-col overflow-hidden border border-border bg-card"
+              >
+                <div className="aspect-[4/3] overflow-hidden bg-muted">
+                  <img
+                    src={v.image}
+                    alt={v.alt}
+                    loading="lazy"
+                    width={1200}
+                    height={900}
+                    className="h-full w-full object-cover"
+                  />
+                </div>
+                <div className="flex flex-1 flex-col p-5">
+                  <div className="flex items-start justify-between gap-4">
+                    <div>
+                      <p className="text-sm text-muted-foreground">{v.category}</p>
+                      <h3 className="mt-1 text-lg font-bold text-foreground">{v.name}</h3>
+                    </div>
+                    <span className="shrink-0 border border-border px-2 py-1 text-right text-xs font-semibold text-foreground">
+                      {v.status}
+                    </span>
+                  </div>
+                  {v.description && (
+                    <p className="mt-3 text-sm leading-relaxed text-muted-foreground">
+                      {v.description}
+                    </p>
+                  )}
+                  <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-border py-4 text-sm">
+                    <div className="flex items-center gap-2">
+                      <Users className="h-4 w-4 text-primary" aria-hidden="true" />
+                      <span className="text-foreground/85">{v.capacity}</span>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Snowflake className="h-4 w-4 text-primary" aria-hidden="true" />
+                      <span className="text-foreground/85">
+                        {v.airConditioned ? "Ar-condicionado" : "Ventilação natural"}
+                      </span>
+                    </div>
+                  </dl>
+                  <ul className="mt-4 space-y-1.5 text-sm text-muted-foreground">
+                    {v.equipment.map((e) => (
+                      <li key={e} className="flex items-start gap-2">
+                        <CheckCircle2
+                          className="mt-0.5 h-4 w-4 shrink-0 text-primary"
+                          aria-hidden="true"
+                        />
+                        <span>{e}</span>
+                      </li>
+                    ))}
+                  </ul>
+                  <div className="mt-5 grid grid-cols-2 gap-3 border-t border-border pt-4 text-sm">
+                    <div>
+                      <p className="text-muted-foreground">Modalidade</p>
+                      <p className="mt-1 font-semibold text-foreground">{v.mode}</p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-muted-foreground">Valor</p>
+                      <p className="mt-1 font-semibold text-primary">{v.price ?? "Sob consulta"}</p>
+                    </div>
+                  </div>
+                  {(v.year || v.location) && (
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {[v.year ? `Ano ${v.year}` : null, v.location].filter(Boolean).join(" · ")}
+                    </p>
+                  )}
+                  <div className="mt-4 flex gap-2">
+                    <a
+                      href={waLink(`Olá! Tenho interesse no veículo: ${v.name} (${v.mode}).`)}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-whatsapp px-3 py-2 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
+                    >
+                      <WhatsAppIcon className="h-4 w-4" />
+                      Tenho interesse
+                    </a>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
 function Home() {
-  const heroMsg =
-    "Olá! Quero solicitar atendimento da 01 Transportes.";
+  const contactMsg = "Olá! Quero solicitar atendimento da 01 Transportes.";
+  const catalogVehicles = usePublishedVehicles();
   return (
     <div className="min-h-screen bg-background text-foreground">
       {/* Header */}
@@ -141,41 +443,59 @@ function Home() {
               height={126}
             />
           </a>
-          <nav className="hidden md:flex items-center gap-8 text-sm font-medium text-foreground/80">
-            <a href="#servicos" className="hover:text-foreground">Serviços</a>
-            <a href="#frota" className="hover:text-foreground">Frota</a>
-            <a href="#manutencao" className="hover:text-foreground">Manutenção</a>
-            <a href="#contato" className="hover:text-foreground">Contato</a>
+          <nav className="hidden items-center gap-7 text-sm font-medium text-foreground/80 lg:flex">
+            <a href="#frota" className="hover:text-foreground">
+              Catálogo
+            </a>
+            <a href="#servicos" className="hover:text-foreground">
+              Serviços
+            </a>
+            <a href="#manutencao" className="hover:text-foreground">
+              Manutenção
+            </a>
+            <a href="#contato" className="hover:text-foreground">
+              Contato
+            </a>
           </nav>
-          <a
-            href={waLink(heroMsg)}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-4 py-2 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
-          >
-            <WhatsAppIcon className="h-4 w-4" />
-            <span className="hidden sm:inline">Falar no WhatsApp</span>
-            <span className="sm:hidden">WhatsApp</span>
-          </a>
+          <div className="flex items-center gap-2">
+            <Link
+              to="/admin"
+              className="inline-flex items-center gap-2 rounded-md border border-primary px-3 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
+            >
+              <LockKeyhole className="h-4 w-4" aria-hidden="true" />
+              <span className="hidden sm:inline">Área do administrador</span>
+              <span className="sm:hidden">Admin</span>
+            </Link>
+            <a
+              href={waLink(contactMsg)}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-3 py-2 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95 sm:px-4"
+            >
+              <WhatsAppIcon className="h-4 w-4" />
+              <span className="hidden sm:inline">Falar no WhatsApp</span>
+              <span className="sm:hidden">WhatsApp</span>
+            </a>
+          </div>
         </div>
       </header>
 
-      {/* Hero */}
+      {/* Intro */}
       <section id="top" className="border-b border-border bg-background">
-        <div className="container-page grid gap-10 py-14 md:py-20 lg:grid-cols-12 lg:gap-12">
-          <div className="lg:col-span-6 flex flex-col justify-center">
-            <span className="eyebrow">Transporte escolar e comercial</span>
-            <h1 className="mt-4 text-4xl md:text-5xl lg:text-6xl font-black leading-[1.05] text-primary">
-              Transporte escolar para todos os caminhos.
+        <div className="container-page grid gap-6 py-8 md:grid-cols-12 md:items-end md:gap-10 md:py-10">
+          <div className="md:col-span-7">
+            <h1 className="text-3xl font-black leading-tight text-primary md:text-4xl">
+              Catálogo de veículos para locação e venda.
             </h1>
-            <p className="mt-5 max-w-xl text-base md:text-lg text-muted-foreground leading-relaxed">
-              Locação e venda de veículos com frota revisada, documentação em
-              dia e atendimento direto com quem opera. Sem intermediários, sem
-              promessas exageradas.
+            <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground">
+              Encontre vans, micro-ônibus e ônibus para escolas, empresas e eventos. Veja a frota
+              disponível e fale direto com a equipe da 01 Transportes.
             </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+          </div>
+          <div className="md:col-span-5 md:flex md:justify-end">
+            <div className="flex flex-wrap gap-3">
               <a
-                href={waLink(heroMsg)}
+                href={waLink(contactMsg)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-5 py-3 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
@@ -185,48 +505,17 @@ function Home() {
               </a>
               <a
                 href="#frota"
-                className="inline-flex items-center gap-2 rounded-md bg-primary px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+                className="inline-flex items-center gap-2 rounded-md border border-primary px-5 py-3 text-sm font-semibold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
               >
-                Ver a frota
+                Ver catálogo
                 <ArrowRight className="h-4 w-4" />
               </a>
-            </div>
-
-            <dl className="mt-10 grid grid-cols-3 gap-6 border-t border-border pt-6">
-              <div>
-                <dt className="text-xs uppercase tracking-wider text-muted-foreground">Frota</dt>
-                <dd className="mt-1 text-2xl font-bold text-primary">40+</dd>
-                <p className="text-xs text-muted-foreground">veículos ativos</p>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wider text-muted-foreground">Operação</dt>
-                <dd className="mt-1 text-2xl font-bold text-primary">12 anos</dd>
-                <p className="text-xs text-muted-foreground">de atividade</p>
-              </div>
-              <div>
-                <dt className="text-xs uppercase tracking-wider text-muted-foreground">Retorno</dt>
-                <dd className="mt-1 text-2xl font-bold text-primary">1h</dd>
-                <p className="text-xs text-muted-foreground">média comercial</p>
-              </div>
-            </dl>
-          </div>
-          <div className="lg:col-span-6">
-            <div className="relative overflow-hidden rounded-md border border-border bg-surface">
-              <img
-                src={heroBus}
-                alt="Micro-ônibus escolar amarelo estacionado em entrada de escola"
-                width={1600}
-                height={1100}
-                className="h-full w-full object-cover"
-              />
-              <div className="absolute left-4 top-4 inline-flex items-center gap-2 rounded-sm bg-highlight px-3 py-1.5 text-xs font-semibold text-highlight-foreground">
-                <span className="h-1.5 w-1.5 rounded-full bg-highlight-foreground" />
-                Frota vistoriada 2026
-              </div>
             </div>
           </div>
         </div>
       </section>
+
+      <FleetSection vehicles={catalogVehicles} />
 
       {/* Trust bar */}
       <section className="border-b border-border bg-surface">
@@ -245,137 +534,23 @@ function Home() {
         <div className="container-page py-16 md:py-24">
           <div className="grid gap-10 lg:grid-cols-12">
             <div className="lg:col-span-4">
-              <span className="eyebrow">O que fazemos</span>
-              <h2 className="mt-3 text-3xl md:text-4xl font-extrabold text-primary">
-                Locação e venda de veículos.
+              <h2 className="text-3xl md:text-4xl font-extrabold text-primary">
+                Uma frota para diferentes rotinas.
               </h2>
               <p className="mt-4 text-muted-foreground leading-relaxed">
-                Atendemos escolas, empresas, instituições e clientes
-                particulares com uma operação organizada e comunicação direta.
+                Da rota diária da escola ao transporte de uma equipe, montamos a solução com o
+                veículo e o período que fazem sentido para a sua operação.
               </p>
             </div>
             <div className="lg:col-span-8 grid gap-4 sm:grid-cols-3">
               {services.map((s) => (
-                <div
-                  key={s.title}
-                  className="rounded-md border border-border bg-card p-6"
-                >
+                <div key={s.title} className="border-t-2 border-primary bg-card pt-5">
                   <s.icon className="h-6 w-6 text-primary" aria-hidden="true" />
-                  <h3 className="mt-4 text-lg font-bold text-foreground">
-                    {s.title}
-                  </h3>
-                  <p className="mt-2 text-sm text-muted-foreground leading-relaxed">
-                    {s.text}
-                  </p>
+                  <h3 className="mt-4 text-lg font-bold text-foreground">{s.title}</h3>
+                  <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{s.text}</p>
                 </div>
               ))}
             </div>
-          </div>
-        </div>
-      </section>
-
-      {/* Fleet */}
-      <section id="frota" className="border-b border-border bg-surface">
-        <div className="container-page py-16 md:py-24">
-          <div className="flex flex-wrap items-end justify-between gap-4">
-            <div>
-              <span className="eyebrow">Catálogo</span>
-              <h2 className="mt-3 text-3xl md:text-4xl font-extrabold text-primary">
-                Nossa frota.
-              </h2>
-              <p className="mt-3 max-w-xl text-muted-foreground">
-                Veículos disponíveis para locação e venda. Consulte
-                disponibilidade e documentação de cada unidade.
-              </p>
-            </div>
-            <a
-              href={waLink("Olá! Quero ver a disponibilidade atual da frota.")}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm font-semibold text-primary underline-offset-4 hover:underline"
-            >
-              Consultar disponibilidade →
-            </a>
-          </div>
-
-          <div className="mt-10 grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-            {vehicles.map((v) => (
-              <article
-                key={v.name}
-                className="group flex flex-col overflow-hidden rounded-md border border-border bg-card shadow-sm/0 transition-shadow hover:shadow-sm"
-              >
-                <div className="relative aspect-[4/3] overflow-hidden bg-muted">
-                  <img
-                    src={v.image}
-                    alt={v.alt}
-                    loading="lazy"
-                    width={1200}
-                    height={900}
-                    className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-[1.02]"
-                  />
-                  <span className="absolute right-3 top-3 rounded-sm bg-primary px-2 py-1 text-[11px] font-semibold uppercase tracking-wider text-primary-foreground">
-                    {v.mode}
-                  </span>
-                </div>
-                <div className="flex flex-1 flex-col p-5">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                    {v.category}
-                  </span>
-                  <h3 className="mt-1 text-lg font-bold text-foreground">
-                    {v.name}
-                  </h3>
-                  <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-border py-4 text-sm">
-                    <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-primary" aria-hidden="true" />
-                      <span className="text-foreground/85">{v.capacity}</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Snowflake className="h-4 w-4 text-primary" aria-hidden="true" />
-                      <span className="text-foreground/85">Ar-condicionado</span>
-                    </div>
-                  </dl>
-                  <ul className="mt-4 space-y-1.5 text-sm text-muted-foreground">
-                    {v.equipment.map((e) => (
-                      <li key={e} className="flex items-start gap-2">
-                        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
-                        <span>{e}</span>
-                      </li>
-                    ))}
-                  </ul>
-                  <div className="mt-5 flex items-center justify-between">
-                    <span
-                      className={`inline-flex items-center gap-1.5 text-xs font-semibold ${
-                        v.status === "Disponível"
-                          ? "text-[oklch(0.5_0.14_148)]"
-                          : "text-muted-foreground"
-                      }`}
-                    >
-                      <span
-                        className={`h-1.5 w-1.5 rounded-full ${
-                          v.status === "Disponível"
-                            ? "bg-[oklch(0.55_0.15_148)]"
-                            : "bg-muted-foreground"
-                        }`}
-                      />
-                      {v.status}
-                    </span>
-                  </div>
-                  <div className="mt-4 flex gap-2">
-                    <a
-                      href={waLink(
-                        `Olá! Tenho interesse no veículo: ${v.name} (${v.mode}).`,
-                      )}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-whatsapp px-3 py-2 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
-                    >
-                      <WhatsAppIcon className="h-4 w-4" />
-                      Tenho interesse
-                    </a>
-                  </div>
-                </div>
-              </article>
-            ))}
           </div>
         </div>
       </section>
@@ -384,14 +559,13 @@ function Home() {
       <section id="manutencao" className="border-b border-border">
         <div className="container-page grid items-center gap-10 py-16 md:py-24 lg:grid-cols-12">
           <div className="lg:col-span-6 order-2 lg:order-1">
-            <span className="eyebrow">Segurança e manutenção</span>
-            <h2 className="mt-3 text-3xl md:text-4xl font-extrabold text-primary">
-              Frota revisada, documentação em dia.
+            <h2 className="text-3xl md:text-4xl font-extrabold text-primary">
+              A manutenção faz parte do serviço.
             </h2>
             <p className="mt-4 text-muted-foreground leading-relaxed">
-              Todos os veículos passam por manutenção preventiva em oficina
-              própria. Vistorias, laudos e documentação são acompanhados por
-              equipe interna, com histórico disponível a cada locação ou venda.
+              Cuidamos da frota antes de ela chegar à sua rota. As revisões, vistorias e documentos
+              são acompanhados pela equipe interna e podem ser consultados antes da locação ou
+              compra.
             </p>
             <ul className="mt-6 grid gap-3 sm:grid-cols-2">
               {[
@@ -401,19 +575,20 @@ function Home() {
                 "Cintos e itens de segurança revisados",
               ].map((item) => (
                 <li key={item} className="flex items-start gap-2 text-sm">
-                  <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                  <CheckCircle2
+                    className="mt-0.5 h-4 w-4 shrink-0 text-primary"
+                    aria-hidden="true"
+                  />
                   <span className="text-foreground/85">{item}</span>
                 </li>
               ))}
             </ul>
-            <div className="mt-8 inline-flex items-center gap-3 rounded-md border-l-4 border-highlight bg-surface px-4 py-3">
-              <span className="text-sm font-medium text-foreground/85">
-                Solicite o histórico de manutenção do veículo antes de fechar.
-              </span>
-            </div>
+            <p className="mt-8 border-l-2 border-highlight pl-4 text-sm font-medium text-foreground/85">
+              Solicite o histórico de manutenção do veículo antes de fechar.
+            </p>
           </div>
           <div className="lg:col-span-6 order-1 lg:order-2">
-            <div className="overflow-hidden rounded-md border border-border">
+            <div className="overflow-hidden border border-border">
               <img
                 src={maintenance}
                 alt="Mecânico inspecionando o motor de um ônibus escolar em oficina"
@@ -431,20 +606,16 @@ function Home() {
       <section id="contato" className="bg-primary text-primary-foreground">
         <div className="container-page grid gap-10 py-16 md:py-20 lg:grid-cols-12">
           <div className="lg:col-span-7">
-            <span className="text-xs font-semibold uppercase tracking-[0.14em] text-primary-foreground/70">
-              Solicite atendimento
-            </span>
-            <h2 className="mt-3 text-3xl md:text-4xl font-extrabold leading-tight">
+            <h2 className="text-3xl md:text-4xl font-extrabold leading-tight">
               Fale com quem opera a frota.
             </h2>
             <p className="mt-4 max-w-xl text-primary-foreground/80 leading-relaxed">
-              Envie sua demanda pelo WhatsApp com a rota, o número de
-              passageiros e o período. Retornamos com disponibilidade,
-              documentação e valores.
+              Envie sua demanda pelo WhatsApp com a rota, o número de passageiros e o período.
+              Retornamos com disponibilidade, documentação e valores.
             </p>
             <div className="mt-8 flex flex-wrap gap-3">
               <a
-                href={waLink(heroMsg)}
+                href={waLink(contactMsg)}
                 target="_blank"
                 rel="noopener noreferrer"
                 className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-5 py-3 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
@@ -452,33 +623,36 @@ function Home() {
                 <WhatsAppIcon className="h-4 w-4" />
                 Falar no WhatsApp
               </a>
-              <a
-                href="tel:+5511999999999"
-                className="inline-flex items-center gap-2 rounded-md border border-primary-foreground/25 bg-transparent px-5 py-3 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary-foreground/10"
-              >
-                <Phone className="h-4 w-4" />
-                (11) 99999-9999
-              </a>
             </div>
           </div>
-          <div className="lg:col-span-5">
-            <div className="rounded-md border border-primary-foreground/15 bg-primary-foreground/[0.04] p-6">
-              <h3 className="text-base font-bold">Área de atendimento</h3>
-              <ul className="mt-4 space-y-3 text-sm text-primary-foreground/85">
-                <li className="flex items-start gap-3">
+          <div className="border-t border-primary-foreground/20 pt-6 lg:col-span-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+            <h3 className="text-base font-bold">Atendimento</h3>
+            <dl className="mt-4 text-sm text-primary-foreground/85">
+              <div className="border-b border-primary-foreground/15 py-3 first:border-t">
+                <dt className="text-primary-foreground/60">Onde</dt>
+                <dd className="mt-1 flex items-start gap-2">
                   <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-highlight" aria-hidden="true" />
-                  <span>Grande São Paulo e região metropolitana</span>
-                </li>
-                <li className="flex items-start gap-3">
+                  Grande São Paulo e região metropolitana
+                </dd>
+              </div>
+              <div className="border-b border-primary-foreground/15 py-3">
+                <dt className="text-primary-foreground/60">Horário</dt>
+                <dd className="mt-1 flex items-start gap-2">
                   <Clock className="mt-0.5 h-4 w-4 shrink-0 text-highlight" aria-hidden="true" />
-                  <span>Segunda a sábado, 7h às 19h</span>
-                </li>
-                <li className="flex items-start gap-3">
-                  <FileCheck className="mt-0.5 h-4 w-4 shrink-0 text-highlight" aria-hidden="true" />
-                  <span>Notas fiscais e contratos formais</span>
-                </li>
-              </ul>
-            </div>
+                  Segunda a sábado, 7h às 19h
+                </dd>
+              </div>
+              <div className="border-b border-primary-foreground/15 py-3">
+                <dt className="text-primary-foreground/60">Documentos</dt>
+                <dd className="mt-1 flex items-start gap-2">
+                  <FileCheck
+                    className="mt-0.5 h-4 w-4 shrink-0 text-highlight"
+                    aria-hidden="true"
+                  />
+                  Notas fiscais e contratos formais
+                </dd>
+              </div>
+            </dl>
           </div>
         </div>
       </section>
@@ -493,23 +667,18 @@ function Home() {
             © {new Date().getFullYear()} 01 Transportes. Locação e venda de veículos.
           </p>
           <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <a href="#servicos" className="hover:text-foreground">Serviços</a>
-            <a href="#frota" className="hover:text-foreground">Frota</a>
-            <a href="#contato" className="hover:text-foreground">Contato</a>
+            <a href="#servicos" className="hover:text-foreground">
+              Serviços
+            </a>
+            <a href="#frota" className="hover:text-foreground">
+              Frota
+            </a>
+            <a href="#contato" className="hover:text-foreground">
+              Contato
+            </a>
           </div>
         </div>
       </footer>
-
-      {/* Floating WhatsApp */}
-      <a
-        href={waLink(heroMsg)}
-        target="_blank"
-        rel="noopener noreferrer"
-        aria-label="Falar no WhatsApp"
-        className="fixed bottom-5 right-5 z-50 inline-flex h-14 w-14 items-center justify-center rounded-full bg-whatsapp text-whatsapp-foreground shadow-lg transition-transform hover:scale-105"
-      >
-        <WhatsAppIcon className="h-7 w-7" />
-      </a>
     </div>
   );
 }

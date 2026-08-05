@@ -1,29 +1,53 @@
-# Welcome to your Lovable project
+# 01 Transportes
 
-This project was built with [Lovable](https://lovable.dev).
+Site institucional da 01 Transportes, com informações sobre transporte escolar, locação e venda de vans, micro-ônibus e ônibus.
 
-## Build with Lovable
+## Desenvolvimento
 
-Open your project in the [Lovable editor](https://lovable.dev) and keep building.
-
-- **Ship faster**: describe what you want to build and Lovable handles the code.
-- **Stay in sync**: connect the project to GitHub and every change made in Lovable is committed straight to your repository.
-- **Full ownership**: this code is yours. Push to your repository and your changes sync back into Lovable, ready for your next prompt.
-
-## Development
-
-Prefer working locally? You need Node.js and npm — [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating).
+Requisitos: Node.js 20+ e Bun 1.2+.
 
 ```sh
-git clone <this-repository-url>
-cd <repository-name>
-npm i
-npm run dev
+bun install
+bun run dev
 ```
 
-## Built with
+Para gerar a versão de produção:
+
+```sh
+bun run build
+```
+
+## Catálogo e administração
+
+O catálogo público é exibido na página inicial. A área protegida para cadastrar e editar a frota fica em `/admin`.
+
+### Configurar o ambiente
+
+1. Copie o arquivo de exemplo e preencha a URL e a publishable key do projeto Supabase, disponíveis em **Project Settings → API**:
+
+```sh
+cp .env.example .env.local
+```
+
+2. Aplique as migrações em `supabase/migrations/` no projeto Supabase conectado. Elas criam tabelas exclusivas do catálogo, regras de acesso e o bucket privado de fotos `catalog-vehicle-images`.
+
+3. Crie o primeiro usuário em **Authentication → Users** no Supabase. Depois, no SQL Editor, autorize-o substituindo o e-mail:
+
+```sql
+insert into public.catalog_admins (user_id)
+select id
+from auth.users
+where email = 'admin@exemplo.com';
+```
+
+Somente contas registradas em `catalog_admins` podem entrar em `/admin`, enviar fotos, publicar veículos ou alterar o catálogo. Não há cadastro público de administradores.
+
+Veículos marcados como **Publicar no site** substituem os exemplos temporários da página inicial. Cada cadastro aceita título, descrição, modalidade, disponibilidade, marca, modelo, ano, capacidade, quilometragem, preço, localização, diferenciais e múltiplas fotos.
+
+## Stack
 
 - TanStack Start
 - TypeScript
 - React
 - Tailwind CSS
+- Supabase Auth, Postgres e Storage
