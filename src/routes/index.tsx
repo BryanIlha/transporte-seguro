@@ -14,18 +14,9 @@ import {
   Wrench,
 } from "lucide-react";
 import logo from "@/assets/01transportes-logo.svg";
-import vehicleVan from "@/assets/vehicle-van.jpg";
-import vehicleMicrobus from "@/assets/vehicle-microbus.jpg";
-import vehicleBus from "@/assets/vehicle-bus.jpg";
 import maintenance from "@/assets/maintenance.jpg";
-import {
-  availabilityLabel,
-  getCatalogImageUrls,
-  operationModeLabel,
-  type CatalogVehicle,
-  type CatalogVehicleImage,
-} from "@/lib/catalog";
-import { supabase } from "@/lib/supabase";
+import { availabilityLabel, operationModeLabel, type CatalogVehicle } from "@/lib/catalog";
+import { getCatalogVehicles } from "@/lib/catalog-api";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -46,7 +37,7 @@ export const Route = createFileRoute("/")({
   }),
 });
 
-const WA_NUMBER = "5511999999999";
+const WA_NUMBER = import.meta.env.VITE_WHATSAPP_NUMBER ?? "";
 const waLink = (msg: string) => `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
 
 type Vehicle = {
@@ -64,62 +55,6 @@ type Vehicle = {
   year: number | null;
   image: string;
   alt: string;
-};
-
-const fallbackVehicles: Vehicle[] = [
-  {
-    id: "micro-onibus-escolar",
-    name: "Micro-ônibus escolar",
-    category: "Transporte escolar",
-    description: "Veículo preparado para rotas escolares, com documentação e revisão em dia.",
-    capacity: "24 passageiros",
-    equipment: ["Cintos individuais", "Ar-condicionado", "Documentação escolar"],
-    status: "Disponível",
-    mode: "Locação",
-    price: null,
-    airConditioned: true,
-    location: "Grande São Paulo",
-    year: null,
-    image: vehicleMicrobus,
-    alt: "Micro-ônibus escolar amarelo estacionado em rua urbana",
-  },
-  {
-    id: "van-executiva",
-    name: "Van executiva",
-    category: "Fretamento",
-    description: "Conforto e espaço para traslados corporativos, eventos e viagens em grupo.",
-    capacity: "15 passageiros",
-    equipment: ["Ar-condicionado", "Bancos reclináveis", "Porta-malas amplo"],
-    status: "Disponível",
-    mode: "Locação e venda",
-    price: null,
-    airConditioned: true,
-    location: "Grande São Paulo",
-    year: null,
-    image: vehicleVan,
-    alt: "Van branca estacionada em pátio de empresa de transporte",
-  },
-  {
-    id: "onibus-escolar",
-    name: "Ônibus escolar",
-    category: "Transporte escolar",
-    description:
-      "Ônibus para operações escolares ou institucionais, sujeito à confirmação comercial.",
-    capacity: "42 passageiros",
-    equipment: ["Revisão em dia", "Vistoria DETRAN", "Motorista habilitado"],
-    status: "Sob consulta",
-    mode: "Venda",
-    price: null,
-    airConditioned: true,
-    location: "Grande São Paulo",
-    year: null,
-    image: vehicleBus,
-    alt: "Ônibus escolar amarelo estacionado em terminal",
-  },
-];
-
-type CatalogVehicleWithImages = CatalogVehicle & {
-  catalog_vehicle_images: CatalogVehicleImage[];
 };
 
 function getCatalogFallbackFeatures(vehicle: CatalogVehicle) {
@@ -142,10 +77,7 @@ function formatCatalogPrice(priceCents: number | null) {
   }).format(priceCents / 100);
 }
 
-function toDisplayVehicle(
-  vehicle: CatalogVehicleWithImages,
-  imageUrls: Record<string, string>,
-): Vehicle {
+function toDisplayVehicle(vehicle: CatalogVehicle): Vehicle {
   const images = [...(vehicle.catalog_vehicle_images ?? [])].sort(
     (first, second) => first.sort_order - second.sort_order,
   );
@@ -168,44 +100,25 @@ function toDisplayVehicle(
     airConditioned: vehicle.air_conditioned,
     location: vehicle.location,
     year: vehicle.manufactured_year,
-    image: primaryImage ? (imageUrls[primaryImage.path] ?? vehicleBus) : vehicleBus,
+    image: primaryImage?.path ?? maintenance,
     alt: primaryImage?.alt_text ?? vehicle.title,
   };
 }
 
 function usePublishedVehicles() {
-  const [vehicles, setVehicles] = useState<Vehicle[]>(fallbackVehicles);
+  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
 
   useEffect(() => {
-    const client = supabase;
-    if (!client) return;
-    const catalogClient = client;
-
     let cancelled = false;
 
     async function loadVehicles() {
-      const { data, error } = await catalogClient
-        .from("catalog_vehicles")
-        .select("*, catalog_vehicle_images(*)")
-        .not("published_at", "is", null)
-        .order("is_featured", { ascending: false })
-        .order("sort_order", { ascending: true })
-        .order("published_at", { ascending: false });
-
-      if (error || !data || data.length === 0) {
-        if (error) console.error("Não foi possível carregar o catálogo.", error);
+      try {
+        const catalogVehicles = await getCatalogVehicles();
+        if (!catalogVehicles) return;
+        if (!cancelled) setVehicles(catalogVehicles.map(toDisplayVehicle));
+      } catch (error) {
+        console.error("Não foi possível carregar o catálogo.", error);
         return;
-      }
-
-      const catalogVehicles = data as CatalogVehicleWithImages[];
-      const imageUrls = await getCatalogImageUrls(
-        catalogVehicles.flatMap((vehicle) =>
-          (vehicle.catalog_vehicle_images ?? []).map((image) => image.path),
-        ),
-      );
-
-      if (!cancelled) {
-        setVehicles(catalogVehicles.map((vehicle) => toDisplayVehicle(vehicle, imageUrls)));
       }
     }
 

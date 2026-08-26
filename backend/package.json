@@ -1,0 +1,32 @@
+{
+  "name": "@transporte-seguro/api",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "node dist/main.js",
+    "build": "tsc -p tsconfig.json",
+    "db:migrate": "tsx src/db/migrate.ts",
+    "admin:create": "tsx src/cli/create-admin.ts",
+    "admin:delete": "tsx src/cli/delete-admin.ts",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.2",
+    "@fastify/multipart": "^9.2.1",
+    "@fastify/rate-limit": "^10.2.2",
+    "argon2": "^0.43.0",
+    "drizzle-orm": "^0.44.2",
+    "fastify": "^5.4.0",
+    "file-type": "^20.5.0",
+    "postgres": "^3.4.7",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.16.5",
+    "drizzle-kit": "^0.31.4",
+    "tsx": "^4.20.3",
+    "typescript": "^5.8.3",
+    "vitest": "^3.2.4"
+  }
+}

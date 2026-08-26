@@ -1,53 +1,69 @@
 # 01 Transportes
 
-Site institucional da 01 Transportes, com informações sobre transporte escolar, locação e venda de vans, micro-ônibus e ônibus.
+Site institucional e catálogo de veículos da 01 Transportes.
 
 ## Desenvolvimento
 
-Requisitos: Node.js 20+ e Bun 1.2+.
+Requisitos: Node.js 22+.
 
 ```sh
-bun install
-bun run dev
+npm install
+npm run dev
 ```
 
-Para gerar a versão de produção:
+Para validar o site e a API:
 
 ```sh
-bun run build
+npm run lint
+npm run build
+npm test
+npm test --workspace @transporte-seguro/api
 ```
 
-## Catálogo e administração
+## Arquitetura do catálogo
 
-O catálogo público é exibido na página inicial. A área protegida para cadastrar e editar a frota fica em `/admin`.
+O site TanStack Start (`transporte-seguro-web`) consome a API Fastify (`transporte-seguro-api`) por `/api`. A API usa um Postgres dedicado (`transporte-seguro-db`) e volume persistente em `/data`.
 
-### Configurar o ambiente
+O catálogo começa vazio. O painel protegido está em `/admin` e permite cadastrar, editar, publicar e excluir veículos definitivamente. Fotos são públicas apenas por endpoint controlado; CRLVs ficam privados e exigem sessão de administrador.
 
-1. Copie o arquivo de exemplo e preencha a URL e a publishable key do projeto Supabase, disponíveis em **Project Settings → API**:
+O CRLV é opcional. Quando anexado, o parser existente extrai dados, o administrador confirma os identificadores e a API registra hash/fingerprint para evitar duplicidade.
+
+## Configuração do backend
+
+Use `.env.example` como referência. No serviço da API, configure:
+
+- `DATABASE_URL`
+- `EXPECTED_DATABASE_NAME`
+- `PROJECT_KEY=transporte-seguro`
+- `SESSION_SECRET` com valor aleatório longo
+- `FILE_ROOT=/data`
+- `WEB_ORIGIN`
+
+No serviço web, configure:
+
+- `BACKEND_INTERNAL_URL` apontando para o serviço privado da API
+- `VITE_WHATSAPP_NUMBER` com o número real em formato internacional
+
+O processo da API executa o preflight de identidade e a migration antes de iniciar. Se o banco conectado não corresponder ao nome esperado ou não tiver a identidade `transporte-seguro`, o processo encerra sem alterar dados.
+
+## Primeiro administrador
+
+Depois de o serviço estar conectado ao Postgres correto, execute no terminal privado da API:
 
 ```sh
-cp .env.example .env.local
+npm run admin:create --workspace @transporte-seguro/api
 ```
 
-2. Aplique as migrações em `supabase/migrations/` no projeto Supabase conectado. Elas criam tabelas exclusivas do catálogo, regras de acesso, o bucket privado de fotos `catalog-vehicle-images` e o bucket privado de documentos `catalog-vehicle-documents`.
+Para remover uma conta temporária de teste:
 
-3. Crie o primeiro usuário em **Authentication → Users** no Supabase. Depois, no SQL Editor, autorize-o substituindo o e-mail:
-
-```sql
-insert into public.catalog_admins (user_id)
-select id
-from auth.users
-where email = 'admin@exemplo.com';
+```sh
+npm run admin:delete --workspace @transporte-seguro/api
 ```
 
-Somente contas registradas em `catalog_admins` podem entrar em `/admin`, enviar fotos, publicar veículos ou alterar o catálogo. Não há cadastro público de administradores.
+Não existe cadastro público de administradores.
 
-Veículos marcados como **Publicar no site** substituem os exemplos temporários da página inicial. Cada novo cadastro exige um CRLV em PDF: o documento é lido no navegador, placa/RENAVAM/chassi são conferidos e o arquivo original fica armazenado em `catalog_vehicle_documents` para auditoria. O fluxo de leitura segue o mesmo parser usado no `routeradar-command-center`; PDFs sem texto suficiente ficam marcados como **revisar** para conferência manual.
+## Coolify e backups
 
-## Stack
+No projeto `Transporte Seguro`, mantenha os recursos web, API e Postgres separados. Monte o volume persistente da API em `/data`, configure backup diário do banco e dos arquivos com retenção de 14 dias/4 semanas e valide uma restauração antes do corte.
 
-- TanStack Start
-- TypeScript
-- React
-- Tailwind CSS
-- Supabase Auth, Postgres e Storage
+As migrations em `supabase/` são legado histórico e não devem ser aplicadas. O 01 Capital possui infraestrutura separada; nenhuma credencial ou migration desse projeto deve ser reutilizada aqui.

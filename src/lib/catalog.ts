@@ -1,8 +1,3 @@
-import { supabase } from "./supabase";
-
-export const CATALOG_IMAGE_BUCKET = "catalog-vehicle-images";
-export const CATALOG_DOCUMENT_BUCKET = "catalog-vehicle-documents";
-
 export type OperationMode = "RENT" | "SALE" | "RENT_AND_SALE";
 export type Availability = "AVAILABLE" | "ON_REQUEST" | "RESERVED";
 
@@ -20,8 +15,6 @@ export type CatalogVehicleDocument = {
   vehicle_id: string;
   tipo_documento: "CRLV";
   arquivo_nome: string;
-  storage_bucket: string;
-  storage_path: string;
   mime_type: "application/pdf";
   tamanho_bytes: number;
   arquivo_hash_sha256: string;
@@ -84,21 +77,6 @@ export const availabilityLabel: Record<Availability, string> = {
   RESERVED: "Reservado",
 };
 
-export async function getCatalogImageUrls(paths: string[], expiresIn = 60 * 60) {
-  const client = supabase;
-  if (!client || paths.length === 0) return {};
-
-  const signedUrls = await Promise.all(
-    paths.map(async (path) => {
-      const { data } = await client.storage
-        .from(CATALOG_IMAGE_BUCKET)
-        .createSignedUrl(path, expiresIn);
-
-      return [path, data?.signedUrl] as const;
-    }),
-  );
-
-  return Object.fromEntries(
-    signedUrls.filter((entry): entry is readonly [string, string] => Boolean(entry[1])),
-  );
+export function getCatalogImageUrls(paths: string[]) {
+  return Object.fromEntries(paths.map((path) => [path, path]));
 }

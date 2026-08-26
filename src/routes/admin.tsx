@@ -14,14 +14,10 @@ import {
   X,
   XCircle,
 } from "lucide-react";
-import type { Session } from "@supabase/supabase-js";
 
 import logo from "@/assets/01transportes-logo.svg";
 import {
-  CATALOG_DOCUMENT_BUCKET,
-  CATALOG_IMAGE_BUCKET,
   availabilityLabel,
-  getCatalogImageUrls,
   operationModeLabel,
   type Availability,
   type CatalogVehicle,
@@ -34,7 +30,20 @@ import {
   normalizeCrlvPlate,
   type CrlvParseResult,
 } from "@/lib/crlv-parser";
-import { isSupabaseConfigured, supabase } from "@/lib/supabase";
+import {
+  createVehicle,
+  deleteDocument,
+  deleteImage,
+  deleteVehicle as deleteVehicleApi,
+  getAdminSession,
+  listAdminVehicles,
+  login,
+  logout,
+  type AdminSession,
+  updateVehicle,
+  uploadCrlv as uploadCrlvApi,
+  uploadImage,
+} from "@/lib/catalog-api";
 
 export const Route = createFileRoute("/admin")({
   component: AdminPage,
@@ -257,7 +266,7 @@ function currentCrlvDocument(vehicle: CatalogVehicleWithImages | undefined) {
 }
 
 function AdminPage() {
-  const [session, setSession] = useState<Session | null>(null);
+  const [session, setSession] = useState<AdminSession | null>(null);
   const [isCheckingAccess, setIsCheckingAccess] = useState(true);
   const [isAdmin, setIsAdmin] = useState(false);
   const [email, setEmail] = useState("");
@@ -287,69 +296,46 @@ function AdminPage() {
   );
   const currentCrlv = useMemo(() => currentCrlvDocument(currentVehicle), [currentVehicle]);
 
-  async function checkAdminAccess(nextSession: Session | null) {
-    if (!supabase || !nextSession) {
+  async function checkAdminAccess(nextSession: AdminSession | null) {
+    if (!nextSession) {
       setSession(null);
       setIsAdmin(false);
       return false;
     }
 
-    const { data, error } = await supabase
-      .from("catalog_admins")
-      .select("user_id")
-      .eq("user_id", nextSession.user.id)
-      .maybeSingle();
-
-    if (error) {
-      setLoginError("Não foi possível verificar seu acesso. Tente novamente.");
-      setIsAdmin(false);
-      return false;
-    }
-
     setSession(nextSession);
-    setIsAdmin(Boolean(data));
-    return Boolean(data);
+    setIsAdmin(true);
+    return true;
   }
 
   async function loadVehicles() {
-    if (!supabase) return;
-
     setIsLoadingVehicles(true);
-    const { data, error } = await supabase
-      .from("catalog_vehicles")
-      .select("*, catalog_vehicle_images(*), catalog_vehicle_documents(*)")
-      .order("updated_at", { ascending: false });
-
-    if (error) {
+    try {
+      const catalogVehicles = await listAdminVehicles();
+      const urls = Object.fromEntries(
+        catalogVehicles.flatMap((vehicle) =>
+          (vehicle.catalog_vehicle_images ?? []).map((image) => [image.path, image.path]),
+        ),
+      );
+      setVehicles(catalogVehicles);
+      setImageUrls(urls);
+    } catch {
       setEditorError("Não foi possível carregar os veículos.");
+    } finally {
       setIsLoadingVehicles(false);
-      return;
     }
-
-    const catalogVehicles = (data ?? []) as CatalogVehicleWithImages[];
-    const urls = await getCatalogImageUrls(
-      catalogVehicles.flatMap((vehicle) =>
-        (vehicle.catalog_vehicle_images ?? []).map((image) => image.path),
-      ),
-    );
-
-    setVehicles(catalogVehicles);
-    setImageUrls(urls);
-    setIsLoadingVehicles(false);
   }
 
   useEffect(() => {
     let cancelled = false;
 
     async function initialize() {
-      if (!supabase) {
-        if (!cancelled) setIsCheckingAccess(false);
-        return;
+      let currentSession: AdminSession | null = null;
+      try {
+        currentSession = await getAdminSession();
+      } catch {
+        currentSession = null;
       }
-
-      const {
-        data: { session: currentSession },
-      } = await supabase.auth.getSession();
 
       if (!cancelled) {
         await checkAdminAccess(currentSession);
@@ -370,27 +356,17 @@ function AdminPage() {
 
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!supabase) return;
-
     setLoginError("");
-    const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-
-    if (error || !data.session) {
+    try {
+      const nextSession = await login(email, password);
+      await checkAdminAccess(nextSession);
+    } catch {
       setLoginError("E-mail ou senha inválidos.");
-      return;
-    }
-
-    const hasAccess = await checkAdminAccess(data.session);
-    if (!hasAccess) {
-      setLoginError("Esta conta não tem acesso ao catálogo.");
-      await supabase.auth.signOut();
-      setSession(null);
     }
   }
 
   async function handleSignOut() {
-    if (!supabase) return;
-    await supabase.auth.signOut();
+    await logout().catch(() => undefined);
     setSession(null);
     setIsAdmin(false);
     setVehicles([]);
@@ -486,53 +462,13 @@ function AdminPage() {
   }
 
   async function uploadFiles(vehicleId: string, files: File[], nextSortOrder: number) {
-    if (!supabase || files.length === 0) return;
-
-    const imagesToInsert: Array<{
-      vehicle_id: string;
-      path: string;
-      alt_text: string;
-      sort_order: number;
-    }> = [];
-    const uploadedPaths: string[] = [];
-
-    try {
-      for (const [index, file] of files.entries()) {
-        const path = `vehicles/${vehicleId}/${crypto.randomUUID()}.${fileExtension(file)}`;
-        const { error: uploadError } = await supabase.storage
-          .from(CATALOG_IMAGE_BUCKET)
-          .upload(path, file, {
-            cacheControl: "3600",
-            contentType: file.type,
-            upsert: false,
-          });
-
-        if (uploadError) throw uploadError;
-        uploadedPaths.push(path);
-
-        imagesToInsert.push({
-          vehicle_id: vehicleId,
-          path,
-          alt_text: form.title,
-          sort_order: nextSortOrder + index,
-        });
-      }
-
-      const { error: imageError } = await supabase
-        .from("catalog_vehicle_images")
-        .insert(imagesToInsert);
-      if (imageError) throw imageError;
-    } catch (error) {
-      if (uploadedPaths.length > 0) {
-        await supabase.storage.from(CATALOG_IMAGE_BUCKET).remove(uploadedPaths);
-      }
-      throw error;
+    for (const [index, file] of files.entries()) {
+      await uploadImage(vehicleId, file, nextSortOrder + index, form.title);
     }
   }
 
   async function uploadCrlv(vehicleId: string, importState: CrlvImportState) {
-    if (!supabase || !importState.file || !importState.result || !importState.hash) return;
-
+    if (!importState.file || !importState.result || !importState.hash) return;
     const confirmedData = {
       ...importState.result.data,
       placa: normalizeCrlvPlate(form.plate),
@@ -540,83 +476,23 @@ function AdminPage() {
       chassi: form.chassi.trim().toUpperCase() || null,
     };
     const fingerprint = getCrlvDocumentFingerprint(confirmedData);
-    const [
-      { data: hashDuplicate, error: hashError },
-      { data: fingerprintDuplicate, error: fingerprintError },
-    ] = await Promise.all([
-      supabase
-        .from("catalog_vehicle_documents")
-        .select("id")
-        .eq("arquivo_hash_sha256", importState.hash)
-        .maybeSingle(),
-      fingerprint
-        ? supabase
-            .from("catalog_vehicle_documents")
-            .select("id")
-            .eq("documento_fingerprint", fingerprint)
-            .maybeSingle()
-        : Promise.resolve({ data: null, error: null }),
-    ]);
-    if (hashError || fingerprintError) throw hashError ?? fingerprintError;
-    if (hashDuplicate || fingerprintDuplicate) {
-      throw new Error("Este CRLV já foi importado anteriormente.");
-    }
-
-    const documentId = crypto.randomUUID();
-    const storagePath = `vehicles/${vehicleId}/crlv/${documentId}.pdf`;
-    const { error: uploadError } = await supabase.storage
-      .from(CATALOG_DOCUMENT_BUCKET)
-      .upload(storagePath, importState.file, {
-        cacheControl: "3600",
-        contentType: "application/pdf",
-        upsert: false,
-      });
-    if (uploadError) throw uploadError;
-
-    try {
-      const { error: insertError } = await supabase.from("catalog_vehicle_documents").insert({
-        id: documentId,
-        vehicle_id: vehicleId,
-        tipo_documento: "CRLV",
-        arquivo_nome: importState.file.name,
-        storage_bucket: CATALOG_DOCUMENT_BUCKET,
-        storage_path: storagePath,
-        mime_type: "application/pdf",
-        tamanho_bytes: importState.file.size,
-        arquivo_hash_sha256: importState.hash,
-        documento_fingerprint: fingerprint,
-        paginas: importState.result.paginas,
-        versao_extrator: "crlv-ts-v1",
-        status_extracao: importState.status === "PRONTO" ? "APLICADO" : "REVISAR",
-        placa_extraida: normalizeCrlvPlate(confirmedData.placa) || null,
-        renavam_extraido: confirmedData.renavam,
-        chassi_extraido: confirmedData.chassi,
-        dados_extraidos: importState.result.data,
-        dados_confirmados: confirmedData,
-        texto_extraido: importState.result.texto_extraido,
-        texto_layout: importState.result.texto_layout,
-        erro_extracao: importState.error || null,
-      });
-      if (insertError) throw insertError;
-
-      const { error: previousError } = await supabase
-        .from("catalog_vehicle_documents")
-        .update({ documento_atual: false, updated_at: new Date().toISOString() })
-        .eq("vehicle_id", vehicleId)
-        .eq("tipo_documento", "CRLV")
-        .eq("documento_atual", true)
-        .neq("id", documentId);
-      if (previousError) throw previousError;
-    } catch (error) {
-      await supabase.storage.from(CATALOG_DOCUMENT_BUCKET).remove([storagePath]);
-      await supabase.from("catalog_vehicle_documents").delete().eq("id", documentId);
-      throw error;
-    }
+    await uploadCrlvApi(
+      vehicleId,
+      importState.file,
+      importState.result,
+      importState.hash,
+      {
+        plate: normalizeCrlvPlate(form.plate),
+        renavam: form.renavam.trim(),
+        chassi: form.chassi.trim().toUpperCase(),
+      },
+      importState.status,
+      fingerprint,
+    );
   }
 
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!supabase) return;
 
     const title = form.title.trim();
     const slug = slugify(form.slug);
@@ -630,10 +506,6 @@ function AdminPage() {
     const plate = normalizeCrlvPlate(form.plate);
     const renavam = form.renavam.trim();
     const chassi = form.chassi.trim().toUpperCase();
-    if (!form.id && (!crlvImport.file || !crlvImport.result)) {
-      setEditorError("Anexe o CRLV para conferir os dados antes de cadastrar o veículo.");
-      return;
-    }
     if (crlvImport.file && (!plate || !renavam || !chassi)) {
       setEditorError("Confira placa, RENAVAM e chassi extraídos do CRLV antes de salvar.");
       return;
@@ -677,28 +549,27 @@ function AdminPage() {
       title,
       slug,
       category,
-      operation_mode: form.operationMode,
+      operationMode: form.operationMode,
       availability: form.availability,
       brand: form.brand.trim() || null,
       model: form.model.trim() || null,
       plate: plate || null,
       renavam: renavam || null,
       chassi: chassi || null,
-      manufactured_year: manufacturedYear.value,
-      passenger_capacity: passengerCapacity.value,
-      mileage_km: mileageKm.value,
-      air_conditioned: form.airConditioned,
+      manufacturedYear: manufacturedYear.value,
+      passengerCapacity: passengerCapacity.value,
+      mileageKm: mileageKm.value,
+      airConditioned: form.airConditioned,
       location: form.location.trim() || null,
-      price_cents: priceCents.value,
+      priceCents: priceCents.value,
       description: form.description.trim(),
       features: form.features
         .split("\n")
         .map((feature) => feature.trim())
         .filter(Boolean),
-      is_featured: form.isFeatured,
-      sort_order: sortOrder.value ?? 0,
-      published_at: publishedAt,
-      updated_at: new Date().toISOString(),
+      isFeatured: form.isFeatured,
+      sortOrder: sortOrder.value ?? 0,
+      publishedAt: publishedAt,
     };
 
     let createdVehicleId: string | null = null;
@@ -706,19 +577,10 @@ function AdminPage() {
       let vehicleId = form.id;
 
       if (vehicleId) {
-        const { error } = await supabase
-          .from("catalog_vehicles")
-          .update(payload)
-          .eq("id", vehicleId);
-        if (error) throw error;
+        await updateVehicle(vehicleId, payload);
       } else {
-        const { data, error } = await supabase
-          .from("catalog_vehicles")
-          .insert(payload)
-          .select("id")
-          .single();
-        if (error || !data) throw error ?? new Error("Não foi possível criar o veículo.");
-        vehicleId = data.id as string;
+        const created = await createVehicle(payload);
+        vehicleId = created.id;
         createdVehicleId = vehicleId;
       }
 
@@ -759,7 +621,7 @@ function AdminPage() {
       }
     } catch (error) {
       if (createdVehicleId) {
-        await supabase.from("catalog_vehicles").delete().eq("id", createdVehicleId);
+        await deleteVehicleApi(createdVehicleId, slug).catch(() => undefined);
       }
       setEditorError(error instanceof Error ? error.message : "Não foi possível salvar o veículo.");
     } finally {
@@ -768,21 +630,13 @@ function AdminPage() {
   }
 
   async function removeImage(image: CatalogVehicleImage) {
-    if (!supabase) return;
     if (!window.confirm("Remover esta foto do veículo?")) return;
 
     setEditorError("");
-    const { error: storageError } = await supabase.storage
-      .from(CATALOG_IMAGE_BUCKET)
-      .remove([image.path]);
-    if (storageError) {
+    try {
+      await deleteImage(image.id);
+    } catch {
       setEditorError("Não foi possível remover a foto.");
-      return;
-    }
-
-    const { error } = await supabase.from("catalog_vehicle_images").delete().eq("id", image.id);
-    if (error) {
-      setEditorError("A foto foi removida do armazenamento, mas não do cadastro.");
       return;
     }
 
@@ -790,46 +644,19 @@ function AdminPage() {
   }
 
   async function deleteVehicle() {
-    if (!supabase || !form.id) return;
+    if (!form.id) return;
     if (!window.confirm("Excluir este veículo e todas as suas fotos?")) return;
 
     setEditorError("");
-    const paths = currentImages.map((image) => image.path);
-    if (paths.length > 0) {
-      const { error: storageError } = await supabase.storage
-        .from(CATALOG_IMAGE_BUCKET)
-        .remove(paths);
-      if (storageError) {
-        setEditorError("Não foi possível excluir as fotos do veículo.");
-        return;
-      }
-    }
-
-    const documentPaths = (currentVehicle?.catalog_vehicle_documents ?? []).map(
-      (document) => document.storage_path,
-    );
-    if (documentPaths.length > 0) {
-      const { error: documentStorageError } = await supabase.storage
-        .from(CATALOG_DOCUMENT_BUCKET)
-        .remove(documentPaths);
-      if (documentStorageError) {
-        setEditorError("Não foi possível excluir o CRLV do veículo.");
-        return;
-      }
-    }
-
-    const { error } = await supabase.from("catalog_vehicles").delete().eq("id", form.id);
-    if (error) {
+    try {
+      await deleteVehicleApi(form.id, form.slug);
+    } catch {
       setEditorError("Não foi possível excluir o veículo.");
       return;
     }
 
     startNewVehicle();
     await loadVehicles();
-  }
-
-  if (!isSupabaseConfigured) {
-    return <ConfigurationNotice />;
   }
 
   if (isCheckingAccess) {
@@ -974,7 +801,7 @@ function AdminPage() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {form.id
                     ? "Atualize os dados do catálogo sem perder o histórico do documento."
-                    : "Comece pelo CRLV para preencher a identificação com segurança."}
+                    : "O CRLV é opcional; quando anexado, ajuda a preencher e conferir a identificação."}
                 </p>
               </div>
               {form.id && currentCrlv && (
@@ -1091,7 +918,7 @@ function AdminPage() {
                       <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
                         {form.id
                           ? "Confira o documento atual ou anexe uma nova versão para atualizar os dados do veículo."
-                          : "O CRLV é lido antes do cadastro para confirmar os identificadores do veículo."}
+                          : "Anexe o CRLV opcionalmente para extrair e confirmar os identificadores do veículo."}
                       </p>
                     </div>
                   </div>
@@ -1530,12 +1357,6 @@ function AdminPage() {
         </div>
       </main>
     </div>
-  );
-}
-
-function ConfigurationNotice() {
-  return (
-    <AdminStatus message="A conexão com o catálogo ainda não foi configurada. Adicione VITE_SUPABASE_URL e VITE_SUPABASE_PUBLISHABLE_KEY ao ambiente de publicação." />
   );
 }
 
