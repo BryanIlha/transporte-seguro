@@ -1,10 +1,11 @@
 FROM node:22-alpine AS build
 
 WORKDIR /app
+ENV NODE_ENV=development
 COPY package.json package-lock.json tsconfig.json ./
 COPY backend/package.json ./backend/package.json
 COPY packages/catalog-contracts ./packages/catalog-contracts
-RUN npm install --workspace @transporte-seguro/api --workspace @transporte-seguro/catalog-contracts
+RUN npm install --include=dev --workspace @transporte-seguro/api --workspace @transporte-seguro/catalog-contracts
 COPY backend ./backend
 RUN npm run build --workspace @transporte-seguro/api
 
