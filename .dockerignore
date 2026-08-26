@@ -1,0 +1,9 @@
+.git
+.output
+node_modules
+.env
+.env.*
+!.env.example
+supabase/.temp
+npm-debug.log*
+*.log

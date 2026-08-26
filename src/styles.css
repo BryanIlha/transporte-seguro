@@ -113,6 +113,15 @@
     outline: 2px solid var(--color-highlight);
     outline-offset: 3px;
   }
+
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]),
+  select {
+    min-height: 2.75rem;
+  }
+
+  textarea {
+    resize: vertical;
+  }
 }
 
 @utility container-page {

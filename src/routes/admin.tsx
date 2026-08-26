@@ -1,19 +1,39 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
-import { ImagePlus, LogOut, Plus, Save, Trash2, X } from "lucide-react";
+import {
+  BadgeCheck,
+  FileText,
+  ImagePlus,
+  Info,
+  Loader2,
+  LogOut,
+  Plus,
+  Save,
+  Trash2,
+  Upload,
+  X,
+  XCircle,
+} from "lucide-react";
 import type { Session } from "@supabase/supabase-js";
 
 import logo from "@/assets/01transportes-logo.svg";
 import {
+  CATALOG_DOCUMENT_BUCKET,
   CATALOG_IMAGE_BUCKET,
   availabilityLabel,
   getCatalogImageUrls,
   operationModeLabel,
   type Availability,
   type CatalogVehicle,
+  type CatalogVehicleDocument,
   type CatalogVehicleImage,
   type OperationMode,
 } from "@/lib/catalog";
+import {
+  getCrlvDocumentFingerprint,
+  normalizeCrlvPlate,
+  type CrlvParseResult,
+} from "@/lib/crlv-parser";
 import { isSupabaseConfigured, supabase } from "@/lib/supabase";
 
 export const Route = createFileRoute("/admin")({
@@ -25,6 +45,7 @@ export const Route = createFileRoute("/admin")({
 
 type CatalogVehicleWithImages = CatalogVehicle & {
   catalog_vehicle_images: CatalogVehicleImage[];
+  catalog_vehicle_documents?: CatalogVehicleDocument[];
 };
 
 type VehicleForm = {
@@ -36,6 +57,9 @@ type VehicleForm = {
   availability: Availability;
   brand: string;
   model: string;
+  plate: string;
+  renavam: string;
+  chassi: string;
   manufacturedYear: string;
   passengerCapacity: string;
   mileageKm: string;
@@ -59,6 +83,9 @@ const emptyVehicleForm = (): VehicleForm => ({
   availability: "ON_REQUEST",
   brand: "",
   model: "",
+  plate: "",
+  renavam: "",
+  chassi: "",
   manufacturedYear: "",
   passengerCapacity: "",
   mileageKm: "",
@@ -86,6 +113,9 @@ function formFromVehicle(vehicle: CatalogVehicle): VehicleForm {
     availability: vehicle.availability,
     brand: vehicle.brand ?? "",
     model: vehicle.model ?? "",
+    plate: vehicle.plate ?? "",
+    renavam: vehicle.renavam ?? "",
+    chassi: vehicle.chassi ?? "",
     manufacturedYear: vehicle.manufactured_year?.toString() ?? "",
     passengerCapacity: vehicle.passenger_capacity?.toString() ?? "",
     mileageKm: vehicle.mileage_km?.toString() ?? "",
@@ -177,6 +207,55 @@ function fileExtension(file: File) {
   return extension && /^[a-z0-9]+$/.test(extension) ? extension : "jpg";
 }
 
+const MAX_DOCUMENT_SIZE_BYTES = 10 * 1024 * 1024;
+
+type CrlvImportStatus = "EMPTY" | "PROCESSANDO" | "PRONTO" | "REVISAR" | "ERRO";
+
+type CrlvImportState = {
+  file: File | null;
+  result: CrlvParseResult | null;
+  hash: string | null;
+  status: CrlvImportStatus;
+  error: string;
+};
+
+const emptyCrlvImport = (): CrlvImportState => ({
+  file: null,
+  result: null,
+  hash: null,
+  status: "EMPTY",
+  error: "",
+});
+
+function sha256File(file: File) {
+  return file
+    .arrayBuffer()
+    .then((bytes) => crypto.subtle.digest("SHA-256", bytes))
+    .then((digest) =>
+      Array.from(new Uint8Array(digest))
+        .map((value) => value.toString(16).padStart(2, "0"))
+        .join(""),
+    );
+}
+
+function validateCrlvFile(file: File) {
+  if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+    return "O CRLV precisa ser um arquivo PDF.";
+  }
+  if (file.size > MAX_DOCUMENT_SIZE_BYTES) {
+    return "O CRLV ultrapassa o limite de 10 MB.";
+  }
+  return "";
+}
+
+function currentCrlvDocument(vehicle: CatalogVehicleWithImages | undefined) {
+  return (
+    vehicle?.catalog_vehicle_documents?.find(
+      (document) => document.tipo_documento === "CRLV" && document.documento_atual,
+    ) ?? null
+  );
+}
+
 function AdminPage() {
   const [session, setSession] = useState<Session | null>(null);
   const [isCheckingAccess, setIsCheckingAccess] = useState(true);
@@ -189,6 +268,7 @@ function AdminPage() {
   const [isLoadingVehicles, setIsLoadingVehicles] = useState(false);
   const [form, setForm] = useState<VehicleForm>(emptyVehicleForm);
   const [newFiles, setNewFiles] = useState<File[]>([]);
+  const [crlvImport, setCrlvImport] = useState<CrlvImportState>(emptyCrlvImport);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [editorError, setEditorError] = useState("");
@@ -200,6 +280,12 @@ function AdminPage() {
       ),
     [form.id, vehicles],
   );
+
+  const currentVehicle = useMemo(
+    () => vehicles.find((vehicle) => vehicle.id === form.id),
+    [form.id, vehicles],
+  );
+  const currentCrlv = useMemo(() => currentCrlvDocument(currentVehicle), [currentVehicle]);
 
   async function checkAdminAccess(nextSession: Session | null) {
     if (!supabase || !nextSession) {
@@ -231,7 +317,7 @@ function AdminPage() {
     setIsLoadingVehicles(true);
     const { data, error } = await supabase
       .from("catalog_vehicles")
-      .select("*, catalog_vehicle_images(*)")
+      .select("*, catalog_vehicle_images(*), catalog_vehicle_documents(*)")
       .order("updated_at", { ascending: false });
 
     if (error) {
@@ -309,11 +395,13 @@ function AdminPage() {
     setIsAdmin(false);
     setVehicles([]);
     setForm(emptyVehicleForm());
+    setCrlvImport(emptyCrlvImport());
   }
 
   function startNewVehicle() {
     setForm(emptyVehicleForm());
     setNewFiles([]);
+    setCrlvImport(emptyCrlvImport());
     setEditorError("");
     setMessage("");
   }
@@ -321,6 +409,7 @@ function AdminPage() {
   function selectVehicle(vehicle: CatalogVehicleWithImages) {
     setForm(formFromVehicle(vehicle));
     setNewFiles([]);
+    setCrlvImport(emptyCrlvImport());
     setEditorError("");
     setMessage("");
   }
@@ -352,6 +441,48 @@ function AdminPage() {
     setEditorError("");
     setMessage("");
     setNewFiles(nextFiles);
+  }
+
+  async function handleCrlvSelection(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.currentTarget.files?.[0] ?? null;
+    event.currentTarget.value = "";
+    if (!file) return;
+
+    const validationError = validateCrlvFile(file);
+    if (validationError) {
+      setCrlvImport({ file, result: null, hash: null, status: "ERRO", error: validationError });
+      return;
+    }
+
+    setEditorError("");
+    setMessage("");
+    setCrlvImport({ file, result: null, hash: null, status: "PROCESSANDO", error: "" });
+
+    try {
+      const [{ extractCrlvPdf }, hash] = await Promise.all([
+        import("@/lib/crlv-pdf"),
+        sha256File(file),
+      ]);
+      const result = await extractCrlvPdf(file);
+      const status = result.data.status_extracao === "ok" ? "PRONTO" : "REVISAR";
+      setCrlvImport({ file, result, hash, status, error: result.data.erro_extracao ?? "" });
+      setForm((current) => ({
+        ...current,
+        plate: current.plate || normalizeCrlvPlate(result.data.placa),
+        renavam: current.renavam || String(result.data.renavam ?? ""),
+        chassi: current.chassi || String(result.data.chassi ?? ""),
+        manufacturedYear: current.manufacturedYear || String(result.data.ano_fabricacao ?? ""),
+        model: current.model || String(result.data.marca_modelo_versao ?? ""),
+      }));
+    } catch (error) {
+      setCrlvImport({
+        file,
+        result: null,
+        hash: null,
+        status: "ERRO",
+        error: error instanceof Error ? error.message : "Não foi possível ler o CRLV.",
+      });
+    }
   }
 
   async function uploadFiles(vehicleId: string, files: File[], nextSortOrder: number) {
@@ -399,6 +530,90 @@ function AdminPage() {
     }
   }
 
+  async function uploadCrlv(vehicleId: string, importState: CrlvImportState) {
+    if (!supabase || !importState.file || !importState.result || !importState.hash) return;
+
+    const confirmedData = {
+      ...importState.result.data,
+      placa: normalizeCrlvPlate(form.plate),
+      renavam: form.renavam.trim() || null,
+      chassi: form.chassi.trim().toUpperCase() || null,
+    };
+    const fingerprint = getCrlvDocumentFingerprint(confirmedData);
+    const [
+      { data: hashDuplicate, error: hashError },
+      { data: fingerprintDuplicate, error: fingerprintError },
+    ] = await Promise.all([
+      supabase
+        .from("catalog_vehicle_documents")
+        .select("id")
+        .eq("arquivo_hash_sha256", importState.hash)
+        .maybeSingle(),
+      fingerprint
+        ? supabase
+            .from("catalog_vehicle_documents")
+            .select("id")
+            .eq("documento_fingerprint", fingerprint)
+            .maybeSingle()
+        : Promise.resolve({ data: null, error: null }),
+    ]);
+    if (hashError || fingerprintError) throw hashError ?? fingerprintError;
+    if (hashDuplicate || fingerprintDuplicate) {
+      throw new Error("Este CRLV já foi importado anteriormente.");
+    }
+
+    const documentId = crypto.randomUUID();
+    const storagePath = `vehicles/${vehicleId}/crlv/${documentId}.pdf`;
+    const { error: uploadError } = await supabase.storage
+      .from(CATALOG_DOCUMENT_BUCKET)
+      .upload(storagePath, importState.file, {
+        cacheControl: "3600",
+        contentType: "application/pdf",
+        upsert: false,
+      });
+    if (uploadError) throw uploadError;
+
+    try {
+      const { error: insertError } = await supabase.from("catalog_vehicle_documents").insert({
+        id: documentId,
+        vehicle_id: vehicleId,
+        tipo_documento: "CRLV",
+        arquivo_nome: importState.file.name,
+        storage_bucket: CATALOG_DOCUMENT_BUCKET,
+        storage_path: storagePath,
+        mime_type: "application/pdf",
+        tamanho_bytes: importState.file.size,
+        arquivo_hash_sha256: importState.hash,
+        documento_fingerprint: fingerprint,
+        paginas: importState.result.paginas,
+        versao_extrator: "crlv-ts-v1",
+        status_extracao: importState.status === "PRONTO" ? "APLICADO" : "REVISAR",
+        placa_extraida: normalizeCrlvPlate(confirmedData.placa) || null,
+        renavam_extraido: confirmedData.renavam,
+        chassi_extraido: confirmedData.chassi,
+        dados_extraidos: importState.result.data,
+        dados_confirmados: confirmedData,
+        texto_extraido: importState.result.texto_extraido,
+        texto_layout: importState.result.texto_layout,
+        erro_extracao: importState.error || null,
+      });
+      if (insertError) throw insertError;
+
+      const { error: previousError } = await supabase
+        .from("catalog_vehicle_documents")
+        .update({ documento_atual: false, updated_at: new Date().toISOString() })
+        .eq("vehicle_id", vehicleId)
+        .eq("tipo_documento", "CRLV")
+        .eq("documento_atual", true)
+        .neq("id", documentId);
+      if (previousError) throw previousError;
+    } catch (error) {
+      await supabase.storage.from(CATALOG_DOCUMENT_BUCKET).remove([storagePath]);
+      await supabase.from("catalog_vehicle_documents").delete().eq("id", documentId);
+      throw error;
+    }
+  }
+
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!supabase) return;
@@ -409,6 +624,18 @@ function AdminPage() {
 
     if (!title || !slug || !category) {
       setEditorError("Preencha título, URL curta e categoria.");
+      return;
+    }
+
+    const plate = normalizeCrlvPlate(form.plate);
+    const renavam = form.renavam.trim();
+    const chassi = form.chassi.trim().toUpperCase();
+    if (!form.id && (!crlvImport.file || !crlvImport.result)) {
+      setEditorError("Anexe o CRLV para conferir os dados antes de cadastrar o veículo.");
+      return;
+    }
+    if (crlvImport.file && (!plate || !renavam || !chassi)) {
+      setEditorError("Confira placa, RENAVAM e chassi extraídos do CRLV antes de salvar.");
       return;
     }
 
@@ -454,6 +681,9 @@ function AdminPage() {
       availability: form.availability,
       brand: form.brand.trim() || null,
       model: form.model.trim() || null,
+      plate: plate || null,
+      renavam: renavam || null,
+      chassi: chassi || null,
       manufactured_year: manufacturedYear.value,
       passenger_capacity: passengerCapacity.value,
       mileage_km: mileageKm.value,
@@ -471,6 +701,7 @@ function AdminPage() {
       updated_at: new Date().toISOString(),
     };
 
+    let createdVehicleId: string | null = null;
     try {
       let vehicleId = form.id;
 
@@ -488,6 +719,17 @@ function AdminPage() {
           .single();
         if (error || !data) throw error ?? new Error("Não foi possível criar o veículo.");
         vehicleId = data.id as string;
+        createdVehicleId = vehicleId;
+      }
+
+      let crlvUploadError: unknown = null;
+      if (crlvImport.file && vehicleId) {
+        try {
+          await uploadCrlv(vehicleId, crlvImport);
+        } catch (error) {
+          crlvUploadError = error;
+          if (!form.id) throw error;
+        }
       }
 
       let uploadError: unknown = null;
@@ -499,9 +741,15 @@ function AdminPage() {
 
       setForm((current) => ({ ...current, id: vehicleId, slug, publishedAt }));
       setNewFiles(uploadError ? newFiles : []);
+      if (!crlvUploadError) setCrlvImport(emptyCrlvImport());
       await loadVehicles();
 
-      if (uploadError) {
+      if (crlvUploadError) {
+        setMessage("");
+        setEditorError(
+          `Veículo ${form.id ? "atualizado" : "cadastrado"}, mas o CRLV não pôde ser salvo. Confira o arquivo e tente novamente.`,
+        );
+      } else if (uploadError) {
         setMessage("");
         setEditorError(
           `Veículo ${form.id ? "atualizado" : "cadastrado"}, mas não foi possível enviar as fotos. Tente salvar novamente.`,
@@ -510,6 +758,9 @@ function AdminPage() {
         setMessage(form.id ? "Veículo atualizado." : "Veículo cadastrado.");
       }
     } catch (error) {
+      if (createdVehicleId) {
+        await supabase.from("catalog_vehicles").delete().eq("id", createdVehicleId);
+      }
       setEditorError(error instanceof Error ? error.message : "Não foi possível salvar o veículo.");
     } finally {
       setIsSaving(false);
@@ -550,6 +801,19 @@ function AdminPage() {
         .remove(paths);
       if (storageError) {
         setEditorError("Não foi possível excluir as fotos do veículo.");
+        return;
+      }
+    }
+
+    const documentPaths = (currentVehicle?.catalog_vehicle_documents ?? []).map(
+      (document) => document.storage_path,
+    );
+    if (documentPaths.length > 0) {
+      const { error: documentStorageError } = await supabase.storage
+        .from(CATALOG_DOCUMENT_BUCKET)
+        .remove(documentPaths);
+      if (documentStorageError) {
+        setEditorError("Não foi possível excluir o CRLV do veículo.");
         return;
       }
     }
@@ -614,22 +878,24 @@ function AdminPage() {
       <main className="container-page py-8 md:py-10">
         <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-6">
           <div>
-            <h1 className="text-3xl font-black text-primary">Veículos</h1>
+            <h1 className="text-3xl font-black tracking-tight text-primary md:text-4xl">
+              Veículos
+            </h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Cadastre fotos, especificações e disponibilidade do catálogo público.
+              Organize o catálogo público com dados conferidos e fotos prontas para publicação.
             </p>
           </div>
           <button
             type="button"
             onClick={startNewVehicle}
-            className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+            className="inline-flex min-h-11 items-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
           >
             <Plus className="h-4 w-4" />
             Novo veículo
           </button>
         </div>
 
-        <div className="mt-8 grid gap-8 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
+        <div className="mt-8 grid items-start gap-8 xl:grid-cols-[minmax(260px,0.72fr)_minmax(0,1.28fr)]">
           <section className="border border-border bg-card">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <h2 className="font-bold">Catálogo cadastrado</h2>
@@ -649,6 +915,7 @@ function AdminPage() {
                     (first, second) => first.sort_order - second.sort_order,
                   )[0];
                   const isSelected = vehicle.id === form.id;
+                  const vehicleCrlv = currentCrlvDocument(vehicle);
 
                   return (
                     <button
@@ -665,6 +932,7 @@ function AdminPage() {
                             src={imageUrls[image?.path ?? ""]}
                             alt=""
                             className="h-full w-full object-cover"
+                            loading="lazy"
                           />
                         ) : (
                           <div className="flex h-full items-center justify-center text-xs text-muted-foreground">
@@ -674,10 +942,22 @@ function AdminPage() {
                       </div>
                       <span className="min-w-0 flex-1">
                         <span className="block truncate font-semibold">{vehicle.title}</span>
-                        <span className="mt-1 block text-sm text-muted-foreground">
-                          {vehicle.category} · {vehicle.published_at ? "Publicado" : "Rascunho"}
+                        <span className="mt-1 block truncate text-sm text-muted-foreground">
+                          {vehicle.plate || "Sem placa"} · {vehicle.category}
                         </span>
                       </span>
+                      {vehicleCrlv &&
+                        (vehicleCrlv.status_extracao === "APLICADO" ? (
+                          <BadgeCheck
+                            className="h-4 w-4 shrink-0 text-whatsapp"
+                            aria-label="CRLV conferido"
+                          />
+                        ) : (
+                          <Info
+                            className="h-4 w-4 shrink-0 text-primary"
+                            aria-label="CRLV requer revisão"
+                          />
+                        ))}
                     </button>
                   );
                 })}
@@ -686,12 +966,38 @@ function AdminPage() {
           </section>
 
           <section className="border border-border bg-card">
-            <div className="border-b border-border px-5 py-4">
-              <h2 className="font-bold">{form.id ? "Editar veículo" : "Novo veículo"}</h2>
+            <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-5 md:px-6">
+              <div>
+                <h2 className="text-lg font-bold text-primary">
+                  {form.id ? "Editar veículo" : "Novo veículo"}
+                </h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {form.id
+                    ? "Atualize os dados do catálogo sem perder o histórico do documento."
+                    : "Comece pelo CRLV para preencher a identificação com segurança."}
+                </p>
+              </div>
+              {form.id && currentCrlv && (
+                <span
+                  className={`hidden items-center gap-1.5 text-xs font-semibold sm:inline-flex ${
+                    currentCrlv.status_extracao === "APLICADO" ? "text-whatsapp" : "text-primary"
+                  }`}
+                >
+                  {currentCrlv.status_extracao === "APLICADO" ? (
+                    <BadgeCheck className="h-4 w-4" aria-hidden="true" />
+                  ) : (
+                    <Info className="h-4 w-4" aria-hidden="true" />
+                  )}
+                  {currentCrlv.status_extracao === "APLICADO"
+                    ? "CRLV conferido"
+                    : "CRLV requer revisão"}
+                </span>
+              )}
             </div>
 
-            <form onSubmit={handleSave} className="space-y-8 p-5">
+            <form onSubmit={handleSave} className="space-y-8 p-5 md:p-6">
               <fieldset className="grid gap-5 md:grid-cols-2">
+                <legend className="sr-only">Identificação do anúncio</legend>
                 <label className="grid gap-2 md:col-span-2">
                   <span className="text-sm font-medium">Título</span>
                   <input
@@ -769,7 +1075,189 @@ function AdminPage() {
                 </label>
               </fieldset>
 
+              <section
+                className="border border-border bg-surface/60 p-4 sm:p-5"
+                aria-labelledby="crlv-heading"
+              >
+                <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+                  <div className="flex gap-3">
+                    <div className="grid h-10 w-10 shrink-0 place-items-center bg-primary text-primary-foreground">
+                      <FileText className="h-5 w-5" aria-hidden="true" />
+                    </div>
+                    <div>
+                      <h3 id="crlv-heading" className="font-bold text-primary">
+                        Conferência do CRLV
+                      </h3>
+                      <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
+                        {form.id
+                          ? "Confira o documento atual ou anexe uma nova versão para atualizar os dados do veículo."
+                          : "O CRLV é lido antes do cadastro para confirmar os identificadores do veículo."}
+                      </p>
+                    </div>
+                  </div>
+                  <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 border border-border bg-background px-3 py-2 text-sm font-semibold transition-colors hover:bg-card">
+                    <Upload className="h-4 w-4" aria-hidden="true" />
+                    {currentCrlv ? "Substituir CRLV" : "Anexar CRLV"}
+                    <input
+                      type="file"
+                      accept="application/pdf,.pdf"
+                      onChange={(event) => void handleCrlvSelection(event)}
+                      className="sr-only"
+                    />
+                  </label>
+                </div>
+
+                {currentCrlv && !crlvImport.file && (
+                  <div
+                    className={`mt-4 flex items-start gap-3 border px-3 py-3 text-sm ${
+                      currentCrlv.status_extracao === "APLICADO"
+                        ? "border-whatsapp/30 bg-whatsapp/10"
+                        : "border-highlight/50 bg-highlight/15"
+                    }`}
+                  >
+                    {currentCrlv.status_extracao === "APLICADO" ? (
+                      <BadgeCheck
+                        className="mt-0.5 h-4 w-4 shrink-0 text-whatsapp"
+                        aria-hidden="true"
+                      />
+                    ) : (
+                      <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                    )}
+                    <div className="min-w-0">
+                      <p className="font-semibold text-foreground">
+                        {currentCrlv.status_extracao === "APLICADO"
+                          ? "CRLV conferido e armazenado"
+                          : "CRLV armazenado com revisão pendente"}
+                      </p>
+                      <p
+                        className="mt-1 truncate text-muted-foreground"
+                        title={currentCrlv.arquivo_nome}
+                      >
+                        {currentCrlv.arquivo_nome} · {currentCrlv.paginas} página(s)
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {crlvImport.status === "PROCESSANDO" && (
+                  <div
+                    className="mt-4 flex items-center gap-3 border border-border bg-background px-3 py-3 text-sm"
+                    role="status"
+                    aria-live="polite"
+                  >
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" aria-hidden="true" />
+                    <span>Lendo o PDF e conferindo os campos do CRLV…</span>
+                  </div>
+                )}
+
+                {crlvImport.file && crlvImport.status !== "PROCESSANDO" && (
+                  <div className="mt-4 border border-border bg-background px-3 py-3 text-sm">
+                    <div className="flex items-start gap-3">
+                      {crlvImport.status === "ERRO" ? (
+                        <XCircle
+                          className="mt-0.5 h-4 w-4 shrink-0 text-destructive"
+                          aria-hidden="true"
+                        />
+                      ) : crlvImport.status === "REVISAR" ? (
+                        <Info className="mt-0.5 h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                      ) : (
+                        <BadgeCheck
+                          className="mt-0.5 h-4 w-4 shrink-0 text-whatsapp"
+                          aria-hidden="true"
+                        />
+                      )}
+                      <div className="min-w-0">
+                        <p className="font-semibold">
+                          {crlvImport.status === "ERRO"
+                            ? "Não foi possível conferir este arquivo"
+                            : crlvImport.status === "REVISAR"
+                              ? "CRLV lido com pontos para revisar"
+                              : "CRLV lido e pronto para salvar"}
+                        </p>
+                        <p
+                          className="mt-1 truncate text-muted-foreground"
+                          title={crlvImport.file.name}
+                        >
+                          {crlvImport.file.name}
+                        </p>
+                        {crlvImport.error && (
+                          <p className="mt-2 text-sm text-primary" role="alert">
+                            {crlvImport.error}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {(crlvImport.file || currentCrlv) && (
+                  <div className="mt-4 grid gap-4 sm:grid-cols-3">
+                    <label className="grid gap-2">
+                      <span className="text-sm font-medium">Placa</span>
+                      <input
+                        value={form.plate}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            plate: normalizeCrlvPlate(event.target.value),
+                          }))
+                        }
+                        className="h-11 border border-input bg-background px-3 font-mono text-sm uppercase read-only:bg-muted read-only:text-muted-foreground"
+                        placeholder="ABC1D23"
+                        readOnly={!crlvImport.file}
+                        required={Boolean(crlvImport.file)}
+                        aria-describedby="crlv-identity-help"
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-sm font-medium">RENAVAM</span>
+                      <input
+                        value={form.renavam}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            renavam: event.target.value.replace(/\D/g, ""),
+                          }))
+                        }
+                        className="h-11 border border-input bg-background px-3 font-mono text-sm read-only:bg-muted read-only:text-muted-foreground"
+                        placeholder="11 dígitos"
+                        readOnly={!crlvImport.file}
+                        required={Boolean(crlvImport.file)}
+                        inputMode="numeric"
+                        aria-describedby="crlv-identity-help"
+                      />
+                    </label>
+                    <label className="grid gap-2">
+                      <span className="text-sm font-medium">Chassi</span>
+                      <input
+                        value={form.chassi}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            chassi: event.target.value.toUpperCase(),
+                          }))
+                        }
+                        className="h-11 border border-input bg-background px-3 font-mono text-sm uppercase read-only:bg-muted read-only:text-muted-foreground"
+                        placeholder="17 caracteres"
+                        readOnly={!crlvImport.file}
+                        required={Boolean(crlvImport.file)}
+                        aria-describedby="crlv-identity-help"
+                      />
+                    </label>
+                  </div>
+                )}
+                <p
+                  id="crlv-identity-help"
+                  className="mt-3 flex items-start gap-2 text-xs leading-relaxed text-muted-foreground"
+                >
+                  <Info className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                  Os campos podem ser ajustados quando a leitura do PDF pedir revisão. O arquivo
+                  original permanece armazenado para auditoria.
+                </p>
+              </section>
+
               <fieldset className="grid gap-5 border-t border-border pt-6 md:grid-cols-3">
+                <legend className="sr-only">Especificações do veículo</legend>
                 <label className="grid gap-2">
                   <span className="text-sm font-medium">Marca</span>
                   <input
@@ -866,6 +1354,7 @@ function AdminPage() {
               </fieldset>
 
               <fieldset className="grid gap-5 border-t border-border pt-6">
+                <legend className="sr-only">Descrição e diferenciais</legend>
                 <label className="grid gap-2">
                   <span className="text-sm font-medium">Descrição</span>
                   <textarea
@@ -891,6 +1380,7 @@ function AdminPage() {
               </fieldset>
 
               <fieldset className="grid gap-5 border-t border-border pt-6">
+                <legend className="sr-only">Fotos do veículo</legend>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <h3 className="text-sm font-semibold">Fotos</h3>
@@ -920,6 +1410,7 @@ function AdminPage() {
                             src={imageUrls[image.path]}
                             alt={image.alt_text ?? form.title}
                             className="aspect-[4/3] w-full object-cover"
+                            loading="lazy"
                           />
                         ) : (
                           <div className="flex aspect-[4/3] items-center justify-center bg-muted text-sm text-muted-foreground">
@@ -966,6 +1457,7 @@ function AdminPage() {
               </fieldset>
 
               <fieldset className="grid gap-4 border-t border-border pt-6 md:grid-cols-[1fr_auto]">
+                <legend className="sr-only">Publicação do anúncio</legend>
                 <div className="flex flex-wrap items-center gap-5 text-sm">
                   <label className="flex items-center gap-3">
                     <input
@@ -1025,7 +1517,11 @@ function AdminPage() {
               </fieldset>
 
               {(editorError || message) && (
-                <p className={`text-sm ${editorError ? "text-destructive" : "text-foreground"}`}>
+                <p
+                  className={`text-sm ${editorError ? "text-destructive" : "text-foreground"}`}
+                  role={editorError ? "alert" : "status"}
+                  aria-live="polite"
+                >
                   {editorError || message}
                 </p>
               )}

@@ -1,6 +1,7 @@
 import { supabase } from "./supabase";
 
 export const CATALOG_IMAGE_BUCKET = "catalog-vehicle-images";
+export const CATALOG_DOCUMENT_BUCKET = "catalog-vehicle-documents";
 
 export type OperationMode = "RENT" | "SALE" | "RENT_AND_SALE";
 export type Availability = "AVAILABLE" | "ON_REQUEST" | "RESERVED";
@@ -12,6 +13,33 @@ export type CatalogVehicleImage = {
   alt_text: string | null;
   sort_order: number;
   created_at: string;
+};
+
+export type CatalogVehicleDocument = {
+  id: string;
+  vehicle_id: string;
+  tipo_documento: "CRLV";
+  arquivo_nome: string;
+  storage_bucket: string;
+  storage_path: string;
+  mime_type: "application/pdf";
+  tamanho_bytes: number;
+  arquivo_hash_sha256: string;
+  documento_fingerprint: string | null;
+  paginas: number;
+  versao_extrator: string;
+  status_extracao: "OK" | "REVISAR" | "APLICADO";
+  placa_extraida: string | null;
+  renavam_extraido: string | null;
+  chassi_extraido: string | null;
+  dados_extraidos: Record<string, unknown>;
+  dados_confirmados: Record<string, unknown>;
+  texto_extraido: string;
+  texto_layout: string;
+  erro_extracao: string | null;
+  documento_atual: boolean;
+  created_at: string;
+  updated_at: string;
 };
 
 export type CatalogVehicle = {
@@ -26,6 +54,9 @@ export type CatalogVehicle = {
   manufactured_year: number | null;
   passenger_capacity: number | null;
   mileage_km: number | null;
+  plate: string | null;
+  renavam: string | null;
+  chassi: string | null;
   air_conditioned: boolean;
   location: string | null;
   price_cents: number | null;
@@ -38,6 +69,7 @@ export type CatalogVehicle = {
   created_at: string;
   updated_at: string;
   catalog_vehicle_images?: CatalogVehicleImage[];
+  catalog_vehicle_documents?: CatalogVehicleDocument[];
 };
 
 export const operationModeLabel: Record<OperationMode, string> = {
