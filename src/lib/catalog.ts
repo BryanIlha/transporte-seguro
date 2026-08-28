@@ -35,6 +35,28 @@ export type CatalogVehicleDocument = {
   updated_at: string;
 };
 
+export type CatalogPlateLookup = {
+  status: "SUCCESS" | "INVALID_PLATE" | "NOT_FOUND" | "TOKEN_INVALID" | "QUOTA_EXCEEDED" | "ERROR";
+  plate: string | null;
+  cacheHit: boolean;
+  providerHttpStatus: number | null;
+  message: string | null;
+  snapshot: {
+    brand: string | null;
+    model: string | null;
+    makeModel: string | null;
+    year: string | null;
+    modelYear: string | null;
+    color: string | null;
+    situation: string | null;
+    state: string | null;
+    origin: string | null;
+    logoUrl: string | null;
+  } | null;
+  checkedAt: string | null;
+  applied: boolean;
+};
+
 export type CatalogVehicle = {
   id: string;
   slug: string;
@@ -63,6 +85,7 @@ export type CatalogVehicle = {
   updated_at: string;
   catalog_vehicle_images?: CatalogVehicleImage[];
   catalog_vehicle_documents?: CatalogVehicleDocument[];
+  plate_lookup?: CatalogPlateLookup | null;
 };
 
 export const operationModeLabel: Record<OperationMode, string> = {

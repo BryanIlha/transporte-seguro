@@ -4,6 +4,7 @@ import type {
   CatalogVehicle,
   CatalogVehicleDocument,
   CatalogVehicleImage,
+  CatalogPlateLookup,
   OperationMode,
 } from "./catalog";
 
@@ -11,6 +12,11 @@ const API_BASE = "/api";
 
 type ApiError = { error?: string };
 export type AdminSession = { user: { id: string; email: string } };
+type ApiAdminSession = { admin: { id: string; email: string } };
+
+export function mapAdminSession(payload: ApiAdminSession): AdminSession {
+  return { user: payload.admin };
+}
 
 async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
@@ -105,6 +111,7 @@ function mapVehicle(vehicle: Record<string, unknown>): CatalogVehicle {
     catalog_vehicle_documents: Array.isArray(vehicle.documents)
       ? vehicle.documents.map((document) => mapDocument(document as Record<string, unknown>))
       : [],
+    plate_lookup: vehicle.plateLookup ? (vehicle.plateLookup as CatalogPlateLookup) : null,
   };
 }
 
@@ -114,14 +121,16 @@ export async function getCatalogVehicles() {
 }
 
 export async function getAdminSession() {
-  return request<AdminSession>("/v1/auth/me");
+  return mapAdminSession(await request<ApiAdminSession>("/v1/auth/me"));
 }
 
 export async function login(email: string, password: string) {
-  return request<AdminSession>("/v1/auth/session", {
-    method: "POST",
-    body: JSON.stringify({ email, password }),
-  });
+  return mapAdminSession(
+    await request<ApiAdminSession>("/v1/auth/session", {
+      method: "POST",
+      body: JSON.stringify({ email, password }),
+    }),
+  );
 }
 
 export async function logout() {
@@ -171,6 +180,28 @@ export async function updateVehicle(id: string, payload: VehicleApiPayload) {
     body: JSON.stringify(payload),
   });
   return mapVehicle(result.vehicle);
+}
+
+export type PlateLookupResult = {
+  status: CatalogPlateLookup["status"];
+  plate: string | null;
+  cacheHit: boolean;
+  providerHttpStatus: number | null;
+  message: string | null;
+  snapshot: CatalogPlateLookup["snapshot"];
+  checkedAt: string | null;
+  applied: boolean;
+};
+
+export async function lookupVehiclePlate(
+  plate: string,
+  options: { vehicleId?: string; refresh?: boolean } = {},
+) {
+  const result = await request<{ lookup: PlateLookupResult }>("/v1/admin/vehicles/lookup-plate", {
+    method: "POST",
+    body: JSON.stringify({ plate, ...options }),
+  });
+  return result.lookup;
 }
 
 export async function deleteVehicle(id: string, confirmSlug: string) {

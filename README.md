@@ -38,6 +38,7 @@ Use `.env.example` como referência. No serviço da API, configure:
 - `SESSION_SECRET` com valor aleatório longo
 - `FILE_ROOT=/data`
 - `WEB_ORIGIN`
+- `APIPLACAS_TOKEN` com o token privado da APIPlacas (somente no serviço API; nunca no web)
 
 No serviço web, configure:
 
@@ -45,6 +46,8 @@ No serviço web, configure:
 - `VITE_WHATSAPP_NUMBER` com o número real em formato internacional
 
 O processo da API executa o preflight de identidade e a migration antes de iniciar. Se o banco conectado não corresponder ao nome esperado ou não tiver a identidade `transporte-seguro`, o processo encerra sem alterar dados.
+
+No painel, a placa pode ser consultada pela APIPlacas para preencher marca, modelo e ano. O resultado é armazenado como enriquecimento auditável e reaproveitado em cache; o CRLV continua sendo a fonte confirmada quando houver divergência. O token é opcional para o restante do catálogo, mas necessário para consultas novas por placa.
 
 ## Primeiro administrador
 

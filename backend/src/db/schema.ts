@@ -1,6 +1,7 @@
 import {
   boolean,
   integer,
+  index,
   jsonb,
   pgTable,
   text,
@@ -55,6 +56,18 @@ export const vehicles = pgTable(
     plate: text("plate"),
     renavam: text("renavam"),
     chassi: text("chassi"),
+    apiPlacasStatus: text("apiplacas_status"),
+    apiPlacasBrand: text("apiplacas_marca"),
+    apiPlacasModel: text("apiplacas_modelo"),
+    apiPlacasMakeModel: text("apiplacas_marca_modelo"),
+    apiPlacasYear: text("apiplacas_ano"),
+    apiPlacasModelYear: text("apiplacas_ano_modelo"),
+    apiPlacasColor: text("apiplacas_cor"),
+    apiPlacasSituation: text("apiplacas_situacao"),
+    apiPlacasUf: text("apiplacas_uf"),
+    apiPlacasOrigin: text("apiplacas_origem"),
+    apiPlacasLogoUrl: text("apiplacas_logo_url"),
+    apiPlacasCheckedAt: timestamp("apiplacas_consultado_em", { withTimezone: true }),
     airConditioned: boolean("air_conditioned").default(true).notNull(),
     location: text("location"),
     priceCents: integer("price_cents"),
@@ -67,6 +80,21 @@ export const vehicles = pgTable(
     updatedAt: timestamp("updated_at", { withTimezone: true }).defaultNow().notNull(),
   },
   (table) => ({ slugUnique: uniqueIndex("vehicles_slug_unique").on(table.slug) }),
+);
+
+export const apiPlacasLookups = pgTable(
+  "apiplacas_lookups",
+  {
+    plateKey: text("plate_key").primaryKey(),
+    plateQueried: text("plate_queried").notNull(),
+    status: text("status").notNull(),
+    providerHttpStatus: integer("provider_http_status"),
+    providerMessage: text("provider_message"),
+    snapshot: jsonb("snapshot").$type<Record<string, unknown>>().default({}).notNull(),
+    rawPayload: jsonb("raw_payload").$type<unknown>(),
+    checkedAt: timestamp("checked_at", { withTimezone: true }).defaultNow().notNull(),
+  },
+  (table) => ({ checkedAtIdx: index("apiplacas_lookups_checked_at_idx").on(table.checkedAt) }),
 );
 
 export const vehicleImages = pgTable("vehicle_images", {
@@ -119,3 +147,4 @@ export type AdminUser = typeof adminUsers.$inferSelect;
 export type Vehicle = typeof vehicles.$inferSelect;
 export type VehicleImage = typeof vehicleImages.$inferSelect;
 export type VehicleDocument = typeof vehicleDocuments.$inferSelect;
+export type ApiPlacasLookup = typeof apiPlacasLookups.$inferSelect;

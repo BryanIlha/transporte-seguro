@@ -1,4 +1,4 @@
-import { readFile } from "node:fs/promises";
+import { readdir, readFile } from "node:fs/promises";
 import { sql } from "drizzle-orm";
 import { assertDatabaseIdentity, createDatabase } from "./client.js";
 
@@ -11,11 +11,14 @@ async function main() {
     applied_at timestamptz not null default now()
   )`);
 
-  const name = "0001_init.sql";
-  const [{ count }] = await db.execute<{ count: string }>(
-    sql`select count(*)::text as count from _transporte_seguro_migrations where name = ${name}`,
-  );
-  if (count === "0") {
+  const names = (await readdir(new URL("migrations/", import.meta.url)))
+    .filter((name) => name.endsWith(".sql"))
+    .sort();
+  for (const name of names) {
+    const [{ count }] = await db.execute<{ count: string }>(
+      sql`select count(*)::text as count from _transporte_seguro_migrations where name = ${name}`,
+    );
+    if (count !== "0") continue;
     const migration = await readFile(new URL(`migrations/${name}`, import.meta.url), "utf8");
     await db.transaction(async (transaction) => {
       await transaction.execute(sql.raw(migration));

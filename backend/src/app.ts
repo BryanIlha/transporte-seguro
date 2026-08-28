@@ -7,16 +7,28 @@ import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import { and, desc, eq, gt, isNotNull, or, sql } from "drizzle-orm";
 import { fileTypeFromBuffer } from "file-type";
-import { loginInputSchema, vehicleInputSchema } from "@transporte-seguro/catalog-contracts";
+import {
+  loginInputSchema,
+  plateLookupInputSchema,
+  vehicleInputSchema,
+} from "@transporte-seguro/catalog-contracts";
 import { assertDatabaseIdentity, type Database } from "./db/client.js";
 import {
   adminSessions,
   adminUsers,
+  apiPlacasLookups,
   vehicleDocuments,
   vehicleImages,
   vehicles,
   type VehicleDocument,
 } from "./db/schema.js";
+import {
+  isValidPlate,
+  normalizePlate,
+  queryApiPlacas,
+  type ApiPlacasSnapshot,
+  type ApiPlacasStatus,
+} from "./enrichment/apiplacas.js";
 import { FileStore } from "./storage/file-store.js";
 
 const SESSION_COOKIE = "ts_admin_session";
@@ -66,6 +78,28 @@ function normalizeBody(body: unknown) {
   };
 }
 
+function numberFromCrlv(value: unknown) {
+  const parsed = Number(String(value ?? "").replace(/\D/g, ""));
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+function crlvVehiclePatch(data: Record<string, unknown>) {
+  const plate = normalizePlate(data.placa);
+  const renavam = normalizeOptional(data.renavam)?.replace(/\D/g, "") || null;
+  const chassi = normalizeOptional(data.chassi)?.toUpperCase() ?? null;
+  const model = normalizeOptional(data.marca_modelo_versao);
+  const manufacturedYear = numberFromCrlv(data.ano_fabricacao);
+  const passengerCapacity = numberFromCrlv(data.lotacao_pessoas);
+  return {
+    ...(plate ? { plate } : {}),
+    ...(renavam ? { renavam } : {}),
+    ...(chassi ? { chassi } : {}),
+    ...(model ? { model } : {}),
+    ...(manufacturedYear ? { manufacturedYear } : {}),
+    ...(passengerCapacity ? { passengerCapacity } : {}),
+  };
+}
+
 function serializeImage(image: typeof vehicleImages.$inferSelect, baseUrl = "/api") {
   return {
     id: image.id,
@@ -108,7 +142,9 @@ function serializeVehicle(
   vehicle: typeof vehicles.$inferSelect,
   images: Array<typeof vehicleImages.$inferSelect>,
   documents?: Array<typeof vehicleDocuments.$inferSelect>,
+  options: { includePlateLookup?: boolean } = {},
 ) {
+  const plateLookup = options.includePlateLookup ? serializePlateLookup(vehicle) : undefined;
   return {
     id: vehicle.id,
     slug: vehicle.slug,
@@ -137,6 +173,36 @@ function serializeVehicle(
     updatedAt: vehicle.updatedAt.toISOString(),
     images: images.sort((a, b) => a.sortOrder - b.sortOrder).map((image) => serializeImage(image)),
     ...(documents ? { documents: documents.map(serializeDocument) } : {}),
+    ...(plateLookup ? { plateLookup } : {}),
+  };
+}
+
+function serializePlateLookup(vehicle: typeof vehicles.$inferSelect) {
+  if (!vehicle.apiPlacasStatus && !vehicle.apiPlacasCheckedAt) return null;
+  const status = (vehicle.apiPlacasStatus as ApiPlacasStatus | null) ?? "ERROR";
+  return {
+    status,
+    plate: vehicle.plate,
+    cacheHit: false,
+    providerHttpStatus: null,
+    message: null,
+    snapshot:
+      status === "SUCCESS"
+        ? {
+            brand: vehicle.apiPlacasBrand,
+            model: vehicle.apiPlacasModel,
+            makeModel: vehicle.apiPlacasMakeModel,
+            year: vehicle.apiPlacasYear,
+            modelYear: vehicle.apiPlacasModelYear,
+            color: vehicle.apiPlacasColor,
+            situation: vehicle.apiPlacasSituation,
+            state: vehicle.apiPlacasUf,
+            origin: vehicle.apiPlacasOrigin,
+            logoUrl: vehicle.apiPlacasLogoUrl,
+          }
+        : null,
+    checkedAt: iso(vehicle.apiPlacasCheckedAt),
+    applied: true,
   };
 }
 
@@ -327,10 +393,123 @@ export function buildApp(options: { db: Database; fileStore?: FileStore }): Fast
         .from(vehicleDocuments)
         .where(eq(vehicleDocuments.vehicleId, vehicle.id))
         .orderBy(desc(vehicleDocuments.createdAt));
-      result.push(serializeVehicle(vehicle, images, documents));
+      result.push(serializeVehicle(vehicle, images, documents, { includePlateLookup: true }));
     }
     return { vehicles: result };
   });
+
+  app.post(
+    "/v1/admin/vehicles/lookup-plate",
+    { preHandler: requireAdmin, config: { rateLimit: { max: 20, timeWindow: "1 minute" } } },
+    async (request, reply) => {
+      const parsed = plateLookupInputSchema.safeParse(request.body);
+      if (!parsed.success) return reply.code(400).send({ error: "Placa inválida." });
+      const plate = normalizePlate(parsed.data.plate);
+      if (!plate) return reply.code(400).send({ error: "Informe a placa para consultar." });
+
+      let result: {
+        status: ApiPlacasStatus;
+        plate: string;
+        cacheHit: boolean;
+        providerHttpStatus: number | null;
+        message: string | null;
+        snapshot: ApiPlacasSnapshot | null;
+        checkedAt: string;
+      };
+
+      const [cached] = parsed.data.refresh
+        ? []
+        : await app.db.select().from(apiPlacasLookups).where(eq(apiPlacasLookups.plateKey, plate));
+      if (cached) {
+        result = {
+          status: cached.status as ApiPlacasStatus,
+          plate: cached.plateKey,
+          cacheHit: true,
+          providerHttpStatus: cached.providerHttpStatus,
+          message: cached.providerMessage,
+          snapshot: cached.status === "SUCCESS" ? (cached.snapshot as ApiPlacasSnapshot) : null,
+          checkedAt: cached.checkedAt.toISOString(),
+        };
+      } else {
+        try {
+          const fresh = await queryApiPlacas(parsed.data.plate);
+          result = { ...fresh, cacheHit: false };
+          if (["SUCCESS", "INVALID_PLATE", "NOT_FOUND"].includes(fresh.status)) {
+            await app.db
+              .insert(apiPlacasLookups)
+              .values({
+                plateKey: fresh.plate,
+                plateQueried: parsed.data.plate,
+                status: fresh.status,
+                providerHttpStatus: fresh.providerHttpStatus,
+                providerMessage: fresh.message,
+                snapshot: fresh.snapshot ?? {},
+                rawPayload: fresh.rawPayload,
+                checkedAt: new Date(fresh.checkedAt),
+              })
+              .onConflictDoUpdate({
+                target: apiPlacasLookups.plateKey,
+                set: {
+                  plateQueried: parsed.data.plate,
+                  status: fresh.status,
+                  providerHttpStatus: fresh.providerHttpStatus,
+                  providerMessage: fresh.message,
+                  snapshot: fresh.snapshot ?? {},
+                  rawPayload: fresh.rawPayload,
+                  checkedAt: new Date(fresh.checkedAt),
+                },
+              });
+          }
+        } catch (error) {
+          return reply.code(503).send({ error: errorMessage(error) });
+        }
+      }
+
+      let applied = false;
+      if (parsed.data.vehicleId && isValidPlate(plate)) {
+        const [vehicle] = await app.db
+          .select({ id: vehicles.id, plate: vehicles.plate })
+          .from(vehicles)
+          .where(eq(vehicles.id, parsed.data.vehicleId));
+        if (!vehicle) return reply.code(404).send({ error: "Veículo não encontrado." });
+        if (normalizePlate(vehicle.plate) === plate) {
+          const snapshot = result.snapshot;
+          await app.db
+            .update(vehicles)
+            .set({
+              apiPlacasStatus: result.status,
+              apiPlacasBrand: snapshot?.brand ?? null,
+              apiPlacasModel: snapshot?.model ?? null,
+              apiPlacasMakeModel: snapshot?.makeModel ?? null,
+              apiPlacasYear: snapshot?.year ?? null,
+              apiPlacasModelYear: snapshot?.modelYear ?? null,
+              apiPlacasColor: snapshot?.color ?? null,
+              apiPlacasSituation: snapshot?.situation ?? null,
+              apiPlacasUf: snapshot?.state ?? null,
+              apiPlacasOrigin: snapshot?.origin ?? null,
+              apiPlacasLogoUrl: snapshot?.logoUrl ?? null,
+              apiPlacasCheckedAt: new Date(result.checkedAt),
+              updatedAt: now(),
+            })
+            .where(eq(vehicles.id, vehicle.id));
+          applied = true;
+        }
+      }
+
+      return {
+        lookup: {
+          status: result.status,
+          plate: result.plate,
+          cacheHit: result.cacheHit,
+          providerHttpStatus: result.providerHttpStatus,
+          message: result.message,
+          snapshot: result.snapshot,
+          checkedAt: result.checkedAt,
+          applied,
+        },
+      };
+    },
+  );
 
   app.post("/v1/admin/vehicles", { preHandler: requireAdmin }, async (request, reply) => {
     try {
@@ -465,11 +644,21 @@ export function buildApp(options: { db: Database; fileStore?: FileStore }): Fast
           fileBuffer = await part.toBuffer();
         } else fields[part.fieldname] = part.value;
       }
-      if (!fileBuffer || fileBuffer.subarray(0, 4).toString() !== "%PDF")
+      const detectedPdf = fileBuffer ? await fileTypeFromBuffer(fileBuffer) : null;
+      if (
+        !fileBuffer ||
+        fileBuffer.subarray(0, 5).toString() !== "%PDF-" ||
+        detectedPdf?.mime !== "application/pdf"
+      )
         return reply.code(400).send({ error: "O CRLV precisa ser um PDF válido." });
       const hash = fieldValue(fields, "sha256").toLowerCase();
       if (!/^[a-f0-9]{64}$/.test(hash))
         return reply.code(400).send({ error: "Hash do CRLV inválido." });
+      const computedHash = crypto.createHash("sha256").update(fileBuffer).digest("hex");
+      if (computedHash !== hash)
+        return reply
+          .code(400)
+          .send({ error: "O hash do CRLV não corresponde ao arquivo enviado." });
       const fingerprint = normalizeOptional(fieldValue(fields, "fingerprint"));
       const [duplicateHash] = await app.db
         .select({ id: vehicleDocuments.id })
@@ -499,34 +688,43 @@ export function buildApp(options: { db: Database; fileStore?: FileStore }): Fast
       const storageName = `${documentId}.pdf`;
       await app.fileStore.saveDocument(id, storageName, fileBuffer);
       try {
-        await app.db
-          .update(vehicleDocuments)
-          .set({ current: false, updatedAt: now() })
-          .where(and(eq(vehicleDocuments.vehicleId, id), eq(vehicleDocuments.type, "CRLV")));
-        const [document] = await app.db
-          .insert(vehicleDocuments)
-          .values({
-            id: documentId,
-            vehicleId: id,
-            filename: basename(filename) || "crlv.pdf",
-            storageName,
-            sizeBytes: fileBuffer.length,
-            sha256: hash,
-            fingerprint,
-            pages: Number(fieldValue(fields, "pages") || 0),
-            extractorVersion: fieldValue(fields, "extractorVersion") || "crlv-ts-v1",
-            extractionStatus: fieldValue(fields, "extractionStatus") || "REVISAR",
-            extractedPlate: normalizeOptional(metadata.placa),
-            extractedRenavam: normalizeOptional(metadata.renavam),
-            extractedChassi: normalizeOptional(metadata.chassi),
-            extractedData: metadata,
-            confirmedData,
-            extractionText: fieldValue(fields, "extractionText"),
-            extractionLayout: fieldValue(fields, "extractionLayout"),
-            extractionError: normalizeOptional(fieldValue(fields, "extractionError")),
-            current: true,
-          })
-          .returning();
+        const [document] = await app.db.transaction(async (transaction) => {
+          await transaction
+            .update(vehicleDocuments)
+            .set({ current: false, updatedAt: now() })
+            .where(and(eq(vehicleDocuments.vehicleId, id), eq(vehicleDocuments.type, "CRLV")));
+          const patch = crlvVehiclePatch(confirmedData);
+          if (Object.keys(patch).length > 0) {
+            await transaction
+              .update(vehicles)
+              .set({ ...patch, updatedAt: now() })
+              .where(eq(vehicles.id, id));
+          }
+          return transaction
+            .insert(vehicleDocuments)
+            .values({
+              id: documentId,
+              vehicleId: id,
+              filename: basename(filename) || "crlv.pdf",
+              storageName,
+              sizeBytes: fileBuffer.length,
+              sha256: hash,
+              fingerprint,
+              pages: Number(fieldValue(fields, "pages") || 0),
+              extractorVersion: fieldValue(fields, "extractorVersion") || "crlv-ts-v1",
+              extractionStatus: fieldValue(fields, "extractionStatus") || "REVISAR",
+              extractedPlate: normalizeOptional(metadata.placa),
+              extractedRenavam: normalizeOptional(metadata.renavam),
+              extractedChassi: normalizeOptional(metadata.chassi),
+              extractedData: metadata,
+              confirmedData,
+              extractionText: fieldValue(fields, "extractionText"),
+              extractionLayout: fieldValue(fields, "extractionLayout"),
+              extractionError: normalizeOptional(fieldValue(fields, "extractionError")),
+              current: true,
+            })
+            .returning();
+        });
         return reply.code(201).send({ document: serializeDocument(document) });
       } catch (error) {
         await app.fileStore.removeDocument(id, storageName).catch(() => undefined);

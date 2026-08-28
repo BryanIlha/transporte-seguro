@@ -20,6 +20,7 @@ import {
   availabilityLabel,
   operationModeLabel,
   type Availability,
+  type CatalogPlateLookup,
   type CatalogVehicle,
   type CatalogVehicleDocument,
   type CatalogVehicleImage,
@@ -39,6 +40,7 @@ import {
   listAdminVehicles,
   login,
   logout,
+  lookupVehiclePlate,
   type AdminSession,
   updateVehicle,
   uploadCrlv as uploadCrlvApi,
@@ -278,6 +280,9 @@ function AdminPage() {
   const [form, setForm] = useState<VehicleForm>(emptyVehicleForm);
   const [newFiles, setNewFiles] = useState<File[]>([]);
   const [crlvImport, setCrlvImport] = useState<CrlvImportState>(emptyCrlvImport);
+  const [plateLookup, setPlateLookup] = useState<CatalogPlateLookup | null>(null);
+  const [plateLookupError, setPlateLookupError] = useState("");
+  const [isLookingUpPlate, setIsLookingUpPlate] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [message, setMessage] = useState("");
   const [editorError, setEditorError] = useState("");
@@ -378,6 +383,8 @@ function AdminPage() {
     setForm(emptyVehicleForm());
     setNewFiles([]);
     setCrlvImport(emptyCrlvImport());
+    setPlateLookup(null);
+    setPlateLookupError("");
     setEditorError("");
     setMessage("");
   }
@@ -386,6 +393,8 @@ function AdminPage() {
     setForm(formFromVehicle(vehicle));
     setNewFiles([]);
     setCrlvImport(emptyCrlvImport());
+    setPlateLookup(vehicle.plate_lookup ?? null);
+    setPlateLookupError("");
     setEditorError("");
     setMessage("");
   }
@@ -450,6 +459,7 @@ function AdminPage() {
         manufacturedYear: current.manufacturedYear || String(result.data.ano_fabricacao ?? ""),
         model: current.model || String(result.data.marca_modelo_versao ?? ""),
       }));
+      if (result.data.placa) void lookupPlate(normalizeCrlvPlate(result.data.placa));
     } catch (error) {
       setCrlvImport({
         file,
@@ -458,6 +468,39 @@ function AdminPage() {
         status: "ERRO",
         error: error instanceof Error ? error.message : "Não foi possível ler o CRLV.",
       });
+    }
+  }
+
+  async function lookupPlate(plateValue: string, vehicleId = form.id ?? undefined) {
+    const normalized = normalizeCrlvPlate(plateValue);
+    if (!/^[A-Z]{3}(?:\d[A-Z]\d{2}|\d{4})$/.test(normalized)) {
+      setPlateLookup(null);
+      setPlateLookupError(normalized ? "Informe uma placa brasileira válida." : "");
+      return;
+    }
+
+    setIsLookingUpPlate(true);
+    setPlateLookupError("");
+    try {
+      const result = await lookupVehiclePlate(normalized, { vehicleId });
+      setPlateLookup(result);
+      const snapshot = result.snapshot;
+      if (snapshot) {
+        const year = snapshot.year?.match(/(?:19|20)\d{2}/)?.[0] ?? "";
+        setForm((current) => ({
+          ...current,
+          brand: current.brand || snapshot.brand || "",
+          model: current.model || snapshot.makeModel || snapshot.model || "",
+          manufacturedYear: current.manufacturedYear || year,
+        }));
+      }
+    } catch (error) {
+      setPlateLookup(null);
+      setPlateLookupError(
+        error instanceof Error ? error.message : "Não foi possível consultar a placa.",
+      );
+    } finally {
+      setIsLookingUpPlate(false);
     }
   }
 
@@ -582,6 +625,15 @@ function AdminPage() {
         const created = await createVehicle(payload);
         vehicleId = created.id;
         createdVehicleId = vehicleId;
+      }
+
+      if (vehicleId && plate) {
+        try {
+          const lookup = await lookupVehiclePlate(plate, { vehicleId });
+          setPlateLookup(lookup);
+        } catch {
+          // A missing provider token or temporary provider outage must not block a manual save.
+        }
       }
 
       let crlvUploadError: unknown = null;
@@ -1018,24 +1070,7 @@ function AdminPage() {
                 )}
 
                 {(crlvImport.file || currentCrlv) && (
-                  <div className="mt-4 grid gap-4 sm:grid-cols-3">
-                    <label className="grid gap-2">
-                      <span className="text-sm font-medium">Placa</span>
-                      <input
-                        value={form.plate}
-                        onChange={(event) =>
-                          setForm((current) => ({
-                            ...current,
-                            plate: normalizeCrlvPlate(event.target.value),
-                          }))
-                        }
-                        className="h-11 border border-input bg-background px-3 font-mono text-sm uppercase read-only:bg-muted read-only:text-muted-foreground"
-                        placeholder="ABC1D23"
-                        readOnly={!crlvImport.file}
-                        required={Boolean(crlvImport.file)}
-                        aria-describedby="crlv-identity-help"
-                      />
-                    </label>
+                  <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     <label className="grid gap-2">
                       <span className="text-sm font-medium">RENAVAM</span>
                       <input
@@ -1085,6 +1120,64 @@ function AdminPage() {
 
               <fieldset className="grid gap-5 border-t border-border pt-6 md:grid-cols-3">
                 <legend className="sr-only">Especificações do veículo</legend>
+                <label className="grid gap-2 md:col-span-3">
+                  <span className="text-sm font-medium">Placa</span>
+                  <div className="flex flex-col gap-2 sm:flex-row">
+                    <input
+                      value={form.plate}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          plate: normalizeCrlvPlate(event.target.value),
+                        }))
+                      }
+                      onBlur={() => void lookupPlate(form.plate)}
+                      className="h-10 min-w-0 flex-1 border border-input bg-background px-3 font-mono text-sm uppercase"
+                      placeholder="ABC1D23"
+                      aria-describedby="plate-lookup-help"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => void lookupPlate(form.plate)}
+                      disabled={isLookingUpPlate}
+                      className="inline-flex h-10 items-center justify-center gap-2 border border-border px-3 text-sm font-semibold transition-colors hover:bg-surface disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      {isLookingUpPlate && (
+                        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                      )}
+                      {isLookingUpPlate ? "Consultando…" : "Consultar placa"}
+                    </button>
+                  </div>
+                  <span id="plate-lookup-help" className="text-xs text-muted-foreground">
+                    Consulta automática para preencher marca, modelo e ano. O resultado fica salvo
+                    no cadastro.
+                  </span>
+                  {plateLookupError && (
+                    <span className="text-xs text-destructive" role="alert">
+                      {plateLookupError}
+                    </span>
+                  )}
+                  {plateLookup?.snapshot && (
+                    <div className="mt-1 border border-border bg-surface/60 px-3 py-3 text-xs">
+                      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 font-semibold">
+                        <span>Dados automáticos da placa</span>
+                        <span className="text-muted-foreground">
+                          {plateLookup.cacheHit ? "cache" : "atualizado"} · {plateLookup.status}
+                        </span>
+                      </div>
+                      <p className="mt-1 text-muted-foreground">
+                        {[
+                          plateLookup.snapshot.brand,
+                          plateLookup.snapshot.model || plateLookup.snapshot.makeModel,
+                          plateLookup.snapshot.year,
+                          plateLookup.snapshot.color,
+                        ]
+                          .filter(Boolean)
+                          .join(" · ") || "A consulta não retornou detalhes adicionais."}
+                      </p>
+                    </div>
+                  )}
+                </label>
                 <label className="grid gap-2">
                   <span className="text-sm font-medium">Marca</span>
                   <input

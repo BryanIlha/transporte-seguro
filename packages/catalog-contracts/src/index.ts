@@ -3,6 +3,44 @@ import { z } from "zod";
 export const operationModeSchema = z.enum(["RENT", "SALE", "RENT_AND_SALE"]);
 export const availabilitySchema = z.enum(["AVAILABLE", "ON_REQUEST", "RESERVED"]);
 export const documentStatusSchema = z.enum(["OK", "REVISAR", "APLICADO"]);
+export const apiPlacasStatusSchema = z.enum([
+  "SUCCESS",
+  "INVALID_PLATE",
+  "NOT_FOUND",
+  "TOKEN_INVALID",
+  "QUOTA_EXCEEDED",
+  "ERROR",
+]);
+
+export const apiPlacasSnapshotSchema = z.object({
+  brand: z.string().nullable(),
+  model: z.string().nullable(),
+  makeModel: z.string().nullable(),
+  year: z.string().nullable(),
+  modelYear: z.string().nullable(),
+  color: z.string().nullable(),
+  situation: z.string().nullable(),
+  state: z.string().nullable(),
+  origin: z.string().nullable(),
+  logoUrl: z.string().url().nullable(),
+});
+
+export const plateLookupInputSchema = z.object({
+  plate: z.string().trim().min(1).max(20),
+  vehicleId: z.string().uuid().optional(),
+  refresh: z.boolean().optional().default(false),
+});
+
+export const plateLookupResultSchema = z.object({
+  status: apiPlacasStatusSchema,
+  plate: z.string().nullable(),
+  cacheHit: z.boolean(),
+  providerHttpStatus: z.number().int().nullable(),
+  message: z.string().nullable(),
+  snapshot: apiPlacasSnapshotSchema.nullable(),
+  checkedAt: z.string().datetime().nullable(),
+  applied: z.boolean(),
+});
 
 export const vehicleImageSchema = z.object({
   id: z.string().uuid(),
@@ -108,3 +146,7 @@ export type Vehicle = z.infer<typeof vehicleSchema>;
 export type VehicleImage = z.infer<typeof vehicleImageSchema>;
 export type VehicleDocument = z.infer<typeof vehicleDocumentSchema>;
 export type VehicleInput = z.infer<typeof vehicleInputSchema>;
+export type ApiPlacasStatus = z.infer<typeof apiPlacasStatusSchema>;
+export type ApiPlacasSnapshot = z.infer<typeof apiPlacasSnapshotSchema>;
+export type PlateLookupInput = z.infer<typeof plateLookupInputSchema>;
+export type PlateLookupResult = z.infer<typeof plateLookupResultSchema>;
