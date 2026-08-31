@@ -2,6 +2,7 @@ import "./lib/error-capture";
 
 import { consumeLastCapturedError } from "./lib/error-capture";
 import { renderErrorPage } from "./lib/error-page";
+import { proxyBackendRequest, resolveBackendUrl } from "./lib/backend-proxy";
 
 type ServerEntry = {
   fetch: (request: Request, env: unknown, ctx: unknown) => Promise<Response> | Response;
@@ -47,23 +48,12 @@ function isH3SwallowedErrorBody(body: string): boolean {
 export default {
   async fetch(request: Request, env: unknown, ctx: unknown) {
     try {
-      const backendUrl = process.env.BACKEND_INTERNAL_URL;
       const requestUrl = new URL(request.url);
-      if (backendUrl && requestUrl.pathname.startsWith("/api/")) {
-        const target = new URL(
-          requestUrl.pathname.slice("/api".length) + requestUrl.search,
-          backendUrl,
+      if (requestUrl.pathname.startsWith("/api/")) {
+        return await proxyBackendRequest(
+          request,
+          resolveBackendUrl(process.env, import.meta.env.DEV),
         );
-        const headers = new Headers(request.headers);
-        headers.delete("host");
-        const init: RequestInit & { duplex?: "half" } = {
-          method: request.method,
-          headers,
-          body: ["GET", "HEAD"].includes(request.method) ? undefined : request.body,
-          redirect: "manual",
-          duplex: "half",
-        };
-        return await fetch(target, init);
       }
       const handler = await getServerEntry();
       const response = await handler.fetch(request, env, ctx);

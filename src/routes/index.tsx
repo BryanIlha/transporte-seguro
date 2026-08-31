@@ -1,5 +1,6 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import {
   ArrowRight,
   BadgeCheck,
@@ -8,6 +9,9 @@ import {
   FileCheck,
   LockKeyhole,
   MapPin,
+  Phone,
+  RefreshCw,
+  BusFront,
   ShieldCheck,
   Snowflake,
   Users,
@@ -15,6 +19,8 @@ import {
 } from "lucide-react";
 import logo from "@/assets/01transportes-logo.svg";
 import maintenance from "@/assets/maintenance.jpg";
+import van from "@/assets/vehicle-van.jpg";
+import { WHATSAPP_LABEL, WHATSAPP_NUMBER, whatsappLink as waLink } from "@/lib/contact";
 import { availabilityLabel, operationModeLabel, type CatalogVehicle } from "@/lib/catalog";
 import { getCatalogVehicles } from "@/lib/catalog-api";
 
@@ -26,7 +32,7 @@ export const Route = createFileRoute("/")({
       {
         name: "description",
         content:
-          "Frota escolar e comercial revisada, documentação em dia e atendimento direto pelo WhatsApp. Locação e venda de veículos em todo o Brasil.",
+          "Frota escolar e comercial revisada, documentação em dia e atendimento direto pelo WhatsApp. Locação, venda e montagem de veículos conforme a sua necessidade.",
       },
       { property: "og:title", content: "01 Transportes — Transporte escolar e frota comercial" },
       {
@@ -36,9 +42,6 @@ export const Route = createFileRoute("/")({
     ],
   }),
 });
-
-const WA_NUMBER = import.meta.env.VITE_WHATSAPP_NUMBER ?? "";
-const waLink = (msg: string) => `https://wa.me/${WA_NUMBER}?text=${encodeURIComponent(msg)}`;
 
 type Vehicle = {
   id: string;
@@ -53,7 +56,7 @@ type Vehicle = {
   airConditioned: boolean;
   location: string | null;
   year: number | null;
-  image: string;
+  image: string | null;
   alt: string;
 };
 
@@ -100,36 +103,31 @@ function toDisplayVehicle(vehicle: CatalogVehicle): Vehicle {
     airConditioned: vehicle.air_conditioned,
     location: vehicle.location,
     year: vehicle.manufactured_year,
-    image: primaryImage?.path ?? maintenance,
+    image: primaryImage?.path ?? null,
     alt: primaryImage?.alt_text ?? vehicle.title,
   };
 }
 
 function usePublishedVehicles() {
-  const [vehicles, setVehicles] = useState<Vehicle[]>([]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadVehicles() {
+  return useQuery({
+    queryKey: ["public-catalog"],
+    queryFn: async ({ signal }) => {
+      const controller = new AbortController();
+      const abort = () => controller.abort();
+      signal.addEventListener("abort", abort, { once: true });
+      if (signal.aborted) abort();
+      const timeout = setTimeout(abort, 15_000);
       try {
-        const catalogVehicles = await getCatalogVehicles();
-        if (!catalogVehicles) return;
-        if (!cancelled) setVehicles(catalogVehicles.map(toDisplayVehicle));
-      } catch (error) {
-        console.error("Não foi possível carregar o catálogo.", error);
-        return;
+        return (await getCatalogVehicles(controller.signal)).map(toDisplayVehicle);
+      } finally {
+        clearTimeout(timeout);
+        signal.removeEventListener("abort", abort);
       }
-    }
-
-    void loadVehicles();
-
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  return vehicles;
+    },
+    retry: false,
+    refetchOnWindowFocus: false,
+    staleTime: 60_000,
+  });
 }
 
 const services = [
@@ -154,7 +152,7 @@ const trust = [
   { icon: ShieldCheck, label: "Vistoria e documentação em dia" },
   { icon: Wrench, label: "Manutenção preventiva em oficina própria" },
   { icon: Clock, label: "Resposta comercial em até 1 hora útil" },
-  { icon: MapPin, label: "Atendimento em toda a região" },
+  { icon: MapPin, label: "Grande São Paulo e região metropolitana" },
 ];
 
 function WhatsAppIcon({ className }: { className?: string }) {
@@ -165,7 +163,8 @@ function WhatsAppIcon({ className }: { className?: string }) {
   );
 }
 
-function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
+function FleetSection() {
+  const { data: vehicles = [], isPending, isError, isFetching, refetch } = usePublishedVehicles();
   const [modeFilter, setModeFilter] = useState("ALL");
   const [categoryFilter, setCategoryFilter] = useState("ALL");
   const categories = useMemo(
@@ -176,20 +175,28 @@ function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
     () =>
       vehicles.filter(
         (vehicle) =>
-          (modeFilter === "ALL" || vehicle.mode.includes(modeFilter)) &&
+          (modeFilter === "ALL" || vehicle.mode.toLowerCase().includes(modeFilter.toLowerCase())) &&
           (categoryFilter === "ALL" || vehicle.category === categoryFilter),
       ),
     [categoryFilter, modeFilter, vehicles],
   );
+  const hasFilters = modeFilter !== "ALL" || categoryFilter !== "ALL";
+  const clearFilters = () => {
+    setModeFilter("ALL");
+    setCategoryFilter("ALL");
+  };
 
   return (
-    <section id="frota" className="border-b border-border bg-surface">
-      <div className="container-page py-10 md:py-14">
+    <section
+      id="frota"
+      aria-labelledby="catalog-title"
+      className="border-b border-border bg-background"
+    >
+      <div className="container-page py-12 md:py-16">
         <div className="flex flex-wrap items-end justify-between gap-5">
           <div>
-            <p className="text-sm font-semibold text-primary">Catálogo 01 Transportes</p>
-            <h2 className="mt-2 text-3xl font-extrabold text-primary md:text-4xl">
-              Escolha o veículo para a sua operação.
+            <h2 id="catalog-title" className="text-3xl font-extrabold text-primary md:text-5xl">
+              Encontre seu próximo veículo.
             </h2>
             <p className="mt-3 max-w-xl text-muted-foreground">
               Compare a frota, veja os detalhes e peça uma proposta de locação ou compra direto com
@@ -200,53 +207,127 @@ function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
             href={waLink("Olá! Quero ver a disponibilidade atual da frota.")}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-sm font-semibold text-primary underline-offset-4 hover:underline"
+            className="inline-flex min-h-11 items-center gap-2 text-sm font-semibold text-primary underline-offset-4 hover:underline"
           >
-            Consultar disponibilidade →
+            Consultar disponibilidade <ArrowRight className="h-4 w-4" aria-hidden="true" />
           </a>
         </div>
 
-        <div className="mt-8 flex flex-col gap-4 border-y border-border py-4 sm:flex-row sm:items-end sm:justify-between">
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium text-foreground">Modalidade</span>
-              <select
-                value={modeFilter}
-                onChange={(event) => setModeFilter(event.target.value)}
-                className="h-10 min-w-40 border border-input bg-background px-3 text-sm"
-              >
-                <option value="ALL">Todas</option>
-                <option value="Locação">Locação</option>
-                <option value="Venda">Venda</option>
-              </select>
-            </label>
-            <label className="grid gap-1.5 text-sm">
-              <span className="font-medium text-foreground">Categoria</span>
-              <select
-                value={categoryFilter}
-                onChange={(event) => setCategoryFilter(event.target.value)}
-                className="h-10 min-w-48 border border-input bg-background px-3 text-sm"
-              >
-                <option value="ALL">Todas</option>
-                {categories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </select>
-            </label>
+        {!isPending && !isError && vehicles.length > 0 && (
+          <div className="mt-8 flex flex-col gap-4 border-y border-border py-4 sm:flex-row sm:items-end sm:justify-between">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
+              <label className="grid gap-1.5 text-sm">
+                <span className="font-medium text-foreground">Modalidade</span>
+                <select
+                  value={modeFilter}
+                  onChange={(event) => setModeFilter(event.target.value)}
+                  className="h-10 min-w-40 border border-input bg-background px-3 text-sm"
+                >
+                  <option value="ALL">Todas</option>
+                  <option value="Locação">Locação</option>
+                  <option value="Venda">Venda</option>
+                </select>
+              </label>
+              <label className="grid gap-1.5 text-sm">
+                <span className="font-medium text-foreground">Categoria</span>
+                <select
+                  value={categoryFilter}
+                  onChange={(event) => setCategoryFilter(event.target.value)}
+                  className="h-10 min-w-48 border border-input bg-background px-3 text-sm"
+                >
+                  <option value="ALL">Todas</option>
+                  {categories.map((category) => (
+                    <option key={category} value={category}>
+                      {category}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+            <div className="flex items-center gap-4">
+              {hasFilters && (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="min-h-11 text-sm font-semibold text-primary underline underline-offset-4"
+                >
+                  Limpar filtros
+                </button>
+              )}
+              <p className="text-sm text-muted-foreground" role="status">
+                {filteredVehicles.length} {filteredVehicles.length === 1 ? "veículo" : "veículos"}
+              </p>
+            </div>
           </div>
-          <p className="text-sm text-muted-foreground" aria-live="polite">
-            {filteredVehicles.length} {filteredVehicles.length === 1 ? "veículo" : "veículos"}
-          </p>
-        </div>
+        )}
 
-        {filteredVehicles.length === 0 ? (
-          <div className="border border-dashed border-border bg-card px-5 py-12 text-center">
-            <p className="font-semibold text-foreground">Nenhum veículo encontrado.</p>
-            <p className="mt-2 text-sm text-muted-foreground">
-              Ajuste os filtros ou fale com a equipe para consultar outras opções.
+        {isPending ? (
+          <div className="catalog-state" role="status" aria-busy="true">
+            <RefreshCw className="catalog-loading h-6 w-6 text-primary" aria-hidden="true" />
+            <p className="font-semibold">Carregando o catálogo…</p>
+            <p className="text-sm text-muted-foreground">
+              Buscando os veículos disponíveis para consulta.
             </p>
+          </div>
+        ) : isError ? (
+          <div className="catalog-state">
+            <div role="alert">
+              <h3 className="text-xl font-bold">Não conseguimos carregar o catálogo.</h3>
+              <p className="mt-2 text-sm text-muted-foreground">
+                Tente novamente ou consulte a disponibilidade com nossa equipe.
+              </p>
+            </div>
+            <div className="flex flex-wrap justify-center gap-3">
+              <button
+                type="button"
+                onClick={() => void refetch()}
+                disabled={isFetching}
+                className="button-primary"
+              >
+                <RefreshCw className="h-4 w-4" aria-hidden="true" />
+                {isFetching ? "Carregando…" : "Tentar novamente"}
+              </button>
+              <a
+                className="button-outline"
+                href={waLink(
+                  "Olá! Não consegui acessar o catálogo. Pode me ajudar a consultar os veículos disponíveis?",
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Consultar pelo WhatsApp
+              </a>
+            </div>
+          </div>
+        ) : filteredVehicles.length === 0 ? (
+          <div className="catalog-state">
+            <BusFront className="h-7 w-7 text-primary" aria-hidden="true" />
+            <h3 className="text-xl font-bold">
+              {hasFilters
+                ? "Nenhum veículo com esses filtros."
+                : "Consulte as próximas disponibilidades."}
+            </h3>
+            <p className="max-w-lg text-sm text-muted-foreground">
+              {hasFilters
+                ? "Experimente outra combinação ou veja todos os veículos do catálogo."
+                : "Ainda não há veículos publicados no catálogo. Fale com a equipe sobre o que você precisa."}
+            </p>
+            {hasFilters ? (
+              <button type="button" className="button-primary" onClick={clearFilters}>
+                Limpar filtros
+              </button>
+            ) : (
+              <a
+                className="button-primary"
+                href={waLink(
+                  "Olá! Quero consultar a disponibilidade de veículos para locação ou compra.",
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                Consultar disponibilidade <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </a>
+            )}
           </div>
         ) : (
           <div className="mt-6 grid gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -256,14 +337,27 @@ function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
                 className="flex flex-col overflow-hidden border border-border bg-card"
               >
                 <div className="aspect-[4/3] overflow-hidden bg-muted">
-                  <img
-                    src={v.image}
-                    alt={v.alt}
-                    loading="lazy"
-                    width={1200}
-                    height={900}
-                    className="h-full w-full object-cover"
-                  />
+                  {v.image ? (
+                    <img
+                      src={v.image}
+                      alt={v.alt}
+                      loading="lazy"
+                      width={1200}
+                      height={900}
+                      className="h-full w-full object-cover"
+                      onError={(event) => {
+                        event.currentTarget.style.display = "none";
+                        event.currentTarget.nextElementSibling?.removeAttribute("hidden");
+                      }}
+                    />
+                  ) : null}
+                  <div
+                    hidden={Boolean(v.image)}
+                    className="h-full place-content-center text-center text-sm text-muted-foreground"
+                  >
+                    <BusFront className="mx-auto mb-3 h-8 w-8" aria-hidden="true" />
+                    Foto em breve
+                  </div>
                 </div>
                 <div className="flex flex-1 flex-col p-5">
                   <div className="flex items-start justify-between gap-4">
@@ -281,15 +375,19 @@ function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
                     </p>
                   )}
                   <dl className="mt-4 grid grid-cols-2 gap-3 border-y border-border py-4 text-sm">
-                    <div className="flex items-center gap-2">
-                      <Users className="h-4 w-4 text-primary" aria-hidden="true" />
-                      <span className="text-foreground/85">{v.capacity}</span>
+                    <div>
+                      <dt className="sr-only">Capacidade</dt>
+                      <dd className="flex items-center gap-2 text-foreground/85">
+                        <Users className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        {v.capacity}
+                      </dd>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <Snowflake className="h-4 w-4 text-primary" aria-hidden="true" />
-                      <span className="text-foreground/85">
-                        {v.airConditioned ? "Ar-condicionado" : "Ventilação natural"}
-                      </span>
+                    <div>
+                      <dt className="sr-only">Climatização</dt>
+                      <dd className="flex items-center gap-2 text-foreground/85">
+                        <Snowflake className="h-4 w-4 shrink-0 text-primary" aria-hidden="true" />
+                        {v.airConditioned ? "Ar-condicionado" : "Sem ar-condicionado"}
+                      </dd>
                     </div>
                   </dl>
                   <ul className="mt-4 space-y-1.5 text-sm text-muted-foreground">
@@ -323,7 +421,7 @@ function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
                       href={waLink(`Olá! Tenho interesse no veículo: ${v.name} (${v.mode}).`)}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="inline-flex flex-1 items-center justify-center gap-2 rounded-md bg-whatsapp px-3 py-2 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
+                      className="button-whatsapp flex-1"
                     >
                       <WhatsAppIcon className="h-4 w-4" />
                       Tenho interesse
@@ -339,257 +437,471 @@ function FleetSection({ vehicles }: { vehicles: Vehicle[] }) {
   );
 }
 
-function Home() {
-  const contactMsg = "Olá! Quero solicitar atendimento da 01 Transportes.";
-  const catalogVehicles = usePublishedVehicles();
+const PERSONALIZATION_DRAFT_KEY = "01transportes:personalization:v1";
+const emptyDraft = { use: "", passengers: "", needs: "" };
+const vehicleUses = [
+  "Transporte escolar",
+  "Transporte de equipe",
+  "Eventos e fretamento",
+  "Outra necessidade",
+];
+
+function PersonalizationSection() {
+  const [draft, setDraft] = useState(emptyDraft);
+  const [draftReady, setDraftReady] = useState(false);
+  const [draftSaved, setDraftSaved] = useState(false);
+  const [notice, setNotice] = useState("");
+  const { use, passengers, needs } = draft;
+  const hasDraft = Boolean(use || passengers || needs);
+
+  useEffect(() => {
+    try {
+      const stored: unknown = JSON.parse(
+        sessionStorage.getItem(PERSONALIZATION_DRAFT_KEY) ?? "null",
+      );
+      if (stored && typeof stored === "object") {
+        const value = stored as Record<string, unknown>;
+        setDraft({
+          use: typeof value.use === "string" && vehicleUses.includes(value.use) ? value.use : "",
+          passengers:
+            typeof value.passengers === "string" && /^\d{1,6}$/.test(value.passengers)
+              ? value.passengers
+              : "",
+          needs: typeof value.needs === "string" ? value.needs.slice(0, 1500) : "",
+        });
+      }
+    } catch {
+      // Private browsing and invalid stored drafts must not prevent a new request.
+    } finally {
+      setDraftReady(true);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!draftReady) return;
+    try {
+      if (hasDraft) sessionStorage.setItem(PERSONALIZATION_DRAFT_KEY, JSON.stringify(draft));
+      else sessionStorage.removeItem(PERSONALIZATION_DRAFT_KEY);
+      setDraftSaved(hasDraft);
+    } catch {
+      setDraftSaved(false);
+    }
+  }, [draft, draftReady, hasDraft]);
+
+  function updateDraft(field: keyof typeof emptyDraft, value: string) {
+    setDraft((previous) => ({ ...previous, [field]: value }));
+    setNotice("");
+  }
+  const message = [
+    "Olá! Quero um veículo montado de acordo com a minha necessidade.",
+    use ? `Uso previsto: ${use}.` : null,
+    passengers ? `Número de passageiros: ${passengers}.` : null,
+    needs.trim() ? `O que preciso: ${needs.trim()}` : null,
+    "Podemos conversar sobre as possibilidades de configuração?",
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   return (
-    <div className="min-h-screen bg-background text-foreground">
-      {/* Header */}
+    <section
+      id="personalizacao"
+      className="section-navy border-b border-border"
+      aria-labelledby="custom-title"
+    >
+      <div className="container-page customization-layout">
+        <div>
+          <h2 id="custom-title" className="customization-title font-extrabold">
+            Seu veículo, montado para a sua necessidade.
+          </h2>
+          <p className="mt-5 max-w-lg leading-relaxed text-muted-foreground">
+            O veículo pode ser montado de acordo com o que você precisa. Conte como será usado, quem
+            vai a bordo e quais adaptações deseja consultar.
+          </p>
+        </div>
+        <form
+          action={waLink("")}
+          method="get"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="customization-form self-start"
+        >
+          <input type="hidden" name="text" value={message} />
+          <h3 className="text-xl font-bold">Conte o que você precisa.</h3>
+          <p id="custom-help" className="mt-2 text-sm leading-relaxed text-muted-foreground">
+            Preencha o que já souber. Você poderá revisar a mensagem no WhatsApp antes de enviá-la.
+          </p>
+          <div className="mt-6 grid gap-5 sm:grid-cols-2">
+            <label className="grid gap-2 text-sm font-medium">
+              Uso do veículo
+              <select
+                value={use}
+                onChange={(event) => updateDraft("use", event.target.value)}
+                className="custom-input"
+              >
+                <option value="">Quero orientação</option>
+                {vehicleUses.map((option) => (
+                  <option key={option}>{option}</option>
+                ))}
+              </select>
+            </label>
+            <label className="grid gap-2 text-sm font-medium">
+              Número de passageiros
+              <input
+                type="number"
+                min="1"
+                step="1"
+                inputMode="numeric"
+                placeholder="Ex.: 20"
+                value={passengers}
+                onChange={(event) => updateDraft("passengers", event.target.value)}
+                className="custom-input"
+              />
+            </label>
+            <label className="grid gap-2 text-sm font-medium sm:col-span-2">
+              Necessidades e preferências
+              <textarea
+                rows={4}
+                maxLength={1500}
+                placeholder="Conte sobre a sua operação e o que gostaria de consultar."
+                value={needs}
+                onChange={(event) => updateDraft("needs", event.target.value)}
+                className="custom-input"
+              />
+            </label>
+          </div>
+          <div className="mt-2 flex flex-wrap items-center justify-between gap-x-3 text-xs text-muted-foreground">
+            <p role="status">
+              {notice ||
+                (draftSaved ? "Rascunho salvo nesta aba." : "Todos os campos são opcionais.")}
+            </p>
+            <button
+              type="button"
+              disabled={!hasDraft}
+              onClick={() => {
+                setDraft(emptyDraft);
+                setNotice("Respostas limpas.");
+              }}
+              className="min-h-11 font-semibold underline underline-offset-4 disabled:cursor-default disabled:opacity-50"
+            >
+              Limpar respostas
+            </button>
+          </div>
+          <p id="custom-viability" className="mt-3 text-sm leading-relaxed text-muted-foreground">
+            Nossa equipe confirma as possibilidades, a viabilidade e os valores para cada veículo.
+          </p>
+          <button
+            type="submit"
+            aria-describedby="custom-help custom-viability"
+            className="button-whatsapp mt-5 w-full"
+          >
+            <WhatsAppIcon className="h-5 w-5 shrink-0" /> Conversar sobre meu veículo
+          </button>
+          <p className="mt-3 text-center text-xs leading-relaxed text-muted-foreground">
+            Sem envio automático. A conversa continua com nossa equipe.
+          </p>
+          <details className="mt-4 border-t border-border pt-2">
+            <summary className="flex min-h-11 cursor-pointer items-center text-sm font-medium underline underline-offset-4">
+              Ver mensagem preparada
+            </summary>
+            <p className="pb-2 text-sm leading-relaxed whitespace-pre-line break-words text-muted-foreground">
+              {message}
+            </p>
+          </details>
+        </form>
+      </div>
+    </section>
+  );
+}
+
+function Home() {
+  const contactMsg =
+    "Olá! Quero uma proposta da 01 Transportes. Podemos conversar sobre o tipo de veículo, a rota, os passageiros e o período?";
+  return (
+    <div className="site-home min-h-screen bg-background text-foreground">
+      <a href="#conteudo" className="skip-link">
+        Pular para o conteúdo
+      </a>
       <header className="border-b border-border bg-background">
-        <div className="container-page flex items-center justify-between py-4">
-          <a href="#top" className="flex items-center gap-3" aria-label="01 Transportes">
+        <div className="container-page site-header">
+          <a href="#top" className="site-brand" aria-label="01 Transportes — início">
             <img
               src={logo}
               alt="01 Transportes"
-              className="h-8 md:h-9 w-auto"
               width={899}
               height={126}
+              className="h-auto w-full"
             />
           </a>
-          <nav className="hidden items-center gap-7 text-sm font-medium text-foreground/80 lg:flex">
-            <a href="#frota" className="hover:text-foreground">
-              Catálogo
-            </a>
-            <a href="#servicos" className="hover:text-foreground">
-              Serviços
-            </a>
-            <a href="#manutencao" className="hover:text-foreground">
-              Manutenção
-            </a>
-            <a href="#contato" className="hover:text-foreground">
-              Contato
-            </a>
+          <nav aria-label="Navegação principal" className="site-nav">
+            <a href="#frota">Catálogo</a>
+            <a href="#personalizacao">Sob medida</a>
+            <a href="#servicos">Serviços</a>
+            <a href="#contato">Contato</a>
           </nav>
-          <div className="flex items-center gap-2">
-            <Link
-              to="/admin"
-              className="inline-flex items-center gap-2 rounded-md border border-primary px-3 py-2 text-sm font-semibold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
-            >
-              <LockKeyhole className="h-4 w-4" aria-hidden="true" />
-              <span className="hidden sm:inline">Área do administrador</span>
-              <span className="sm:hidden">Admin</span>
-            </Link>
-            <a
-              href={waLink(contactMsg)}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-3 py-2 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95 sm:px-4"
-            >
-              <WhatsAppIcon className="h-4 w-4" />
-              <span className="hidden sm:inline">Falar no WhatsApp</span>
-              <span className="sm:hidden">WhatsApp</span>
-            </a>
-          </div>
+          <a
+            href={waLink(contactMsg)}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label="Falar no WhatsApp"
+            className="button-whatsapp header-contact"
+          >
+            <WhatsAppIcon className="h-5 w-5" />
+            <span className="hidden sm:inline">Falar no WhatsApp</span>
+          </a>
         </div>
       </header>
 
-      {/* Intro */}
-      <section id="top" className="border-b border-border bg-background">
-        <div className="container-page grid gap-6 py-8 md:grid-cols-12 md:items-end md:gap-10 md:py-10">
-          <div className="md:col-span-7">
-            <h1 className="text-3xl font-black leading-tight text-primary md:text-4xl">
-              Catálogo de veículos para locação e venda.
-            </h1>
-            <p className="mt-3 max-w-2xl text-base leading-relaxed text-muted-foreground">
-              Encontre vans, micro-ônibus e ônibus para escolas, empresas e eventos. Veja a frota
-              disponível e fale direto com a equipe da 01 Transportes.
-            </p>
-          </div>
-          <div className="md:col-span-5 md:flex md:justify-end">
-            <div className="flex flex-wrap gap-3">
-              <a
-                href={waLink(contactMsg)}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-5 py-3 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
-              >
-                <WhatsAppIcon className="h-4 w-4" />
-                Solicitar atendimento
-              </a>
-              <a
-                href="#frota"
-                className="inline-flex items-center gap-2 rounded-md border border-primary px-5 py-3 text-sm font-semibold text-primary transition-colors hover:bg-primary hover:text-primary-foreground"
-              >
-                Ver catálogo
-                <ArrowRight className="h-4 w-4" />
-              </a>
-            </div>
-          </div>
-        </div>
-      </section>
-
-      <FleetSection vehicles={catalogVehicles} />
-
-      {/* Trust bar */}
-      <section className="border-b border-border bg-surface">
-        <div className="container-page grid grid-cols-2 gap-6 py-6 md:grid-cols-4">
-          {trust.map((t) => (
-            <div key={t.label} className="flex items-center gap-3">
-              <t.icon className="h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
-              <span className="text-sm font-medium text-foreground/85">{t.label}</span>
-            </div>
-          ))}
-        </div>
-      </section>
-
-      {/* Services */}
-      <section id="servicos" className="border-b border-border">
-        <div className="container-page py-16 md:py-24">
-          <div className="grid gap-10 lg:grid-cols-12">
-            <div className="lg:col-span-4">
-              <h2 className="text-3xl md:text-4xl font-extrabold text-primary">
-                Uma frota para diferentes rotinas.
-              </h2>
-              <p className="mt-4 text-muted-foreground leading-relaxed">
-                Da rota diária da escola ao transporte de uma equipe, montamos a solução com o
-                veículo e o período que fazem sentido para a sua operação.
+      <main id="conteudo" tabIndex={-1}>
+        <section id="top" className="section-navy" aria-labelledby="hero-title">
+          <div className="container-page hero-layout">
+            <div>
+              <h1 id="hero-title" className="hero-title font-extrabold">
+                O veículo certo para a sua próxima rota.
+              </h1>
+              <p className="mt-5 max-w-lg text-lg font-semibold leading-snug md:text-xl">
+                Transportando pessoas, conectando destinos.
+              </p>
+              <p className="mt-3 max-w-lg text-base leading-relaxed text-muted-foreground md:text-lg">
+                Locação e venda de vans, micro-ônibus e ônibus. Escolha no catálogo ou converse com
+                a gente sobre uma montagem de acordo com a sua necessidade.
+              </p>
+              <div className="mt-7 flex flex-wrap gap-3">
+                <a href="#frota" className="button-primary">
+                  Explorar catálogo <ArrowRight className="h-4 w-4" aria-hidden="true" />
+                </a>
+                <a href="#personalizacao" className="button-outline">
+                  Quero um veículo sob medida
+                </a>
+              </div>
+              <p className="mt-6 flex items-center gap-2 text-sm text-muted-foreground">
+                <ShieldCheck className="h-5 w-5 shrink-0" aria-hidden="true" />
+                Frota revisada e documentação em dia.
               </p>
             </div>
-            <div className="lg:col-span-8 grid gap-4 sm:grid-cols-3">
+            <figure className="hero-vehicle overflow-hidden">
+              <img
+                src={van}
+                alt="Van branca de passageiros, imagem ilustrativa"
+                width={1200}
+                height={900}
+                fetchPriority="high"
+                className="hero-image w-full object-cover"
+              />
+              <figcaption className="flex flex-wrap justify-between gap-2 border-t border-border py-3 text-xs text-muted-foreground">
+                <span>Vans, micro-ônibus e ônibus</span>
+                <span>Imagem ilustrativa</span>
+              </figcaption>
+            </figure>
+          </div>
+        </section>
+
+        <FleetSection />
+
+        <section
+          className="section-black border-b border-border"
+          aria-label="Cuidados com a operação"
+        >
+          <div className="container-page grid grid-cols-2 gap-6 py-7 md:grid-cols-4">
+            {trust.map((t) => (
+              <div key={t.label} className="flex items-start gap-3">
+                <t.icon className="mt-0.5 h-5 w-5 shrink-0 text-primary" aria-hidden="true" />
+                <span className="text-sm font-medium leading-relaxed text-foreground/85">
+                  {t.label}
+                </span>
+              </div>
+            ))}
+          </div>
+        </section>
+
+        <PersonalizationSection />
+
+        <section
+          id="servicos"
+          className="border-b border-border bg-background"
+          aria-labelledby="services-title"
+        >
+          <div className="container-page grid gap-8 py-14 md:py-20 lg:grid-cols-12 lg:gap-16">
+            <div className="lg:col-span-5">
+              <h2
+                id="services-title"
+                className="text-3xl font-extrabold leading-tight text-primary md:text-4xl"
+              >
+                Uma frota para diferentes rotinas.
+              </h2>
+              <p className="mt-4 leading-relaxed text-muted-foreground">
+                Da rota diária da escola ao transporte de uma equipe, encontre a modalidade que faz
+                sentido para a sua operação.
+              </p>
+            </div>
+            <div className="divide-y divide-border border-y border-border lg:col-span-7">
               {services.map((s) => (
-                <div key={s.title} className="border-t-2 border-primary bg-card pt-5">
-                  <s.icon className="h-6 w-6 text-primary" aria-hidden="true" />
-                  <h3 className="mt-4 text-lg font-bold text-foreground">{s.title}</h3>
-                  <p className="mt-2 text-sm text-muted-foreground leading-relaxed">{s.text}</p>
+                <div key={s.title} className="flex gap-5 py-6">
+                  <s.icon className="mt-1 h-6 w-6 shrink-0 text-primary" aria-hidden="true" />
+                  <div>
+                    <h3 className="text-xl font-bold text-foreground">{s.title}</h3>
+                    <p className="mt-2 text-sm leading-relaxed text-muted-foreground">{s.text}</p>
+                  </div>
                 </div>
               ))}
             </div>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Maintenance */}
-      <section id="manutencao" className="border-b border-border">
-        <div className="container-page grid items-center gap-10 py-16 md:py-24 lg:grid-cols-12">
-          <div className="lg:col-span-6 order-2 lg:order-1">
-            <h2 className="text-3xl md:text-4xl font-extrabold text-primary">
-              A manutenção faz parte do serviço.
-            </h2>
-            <p className="mt-4 text-muted-foreground leading-relaxed">
-              Cuidamos da frota antes de ela chegar à sua rota. As revisões, vistorias e documentos
-              são acompanhados pela equipe interna e podem ser consultados antes da locação ou
-              compra.
-            </p>
-            <ul className="mt-6 grid gap-3 sm:grid-cols-2">
-              {[
-                "Manutenção preventiva mensal",
-                "Vistoria DETRAN atualizada",
-                "Motoristas com curso de transporte escolar",
-                "Cintos e itens de segurança revisados",
-              ].map((item) => (
-                <li key={item} className="flex items-start gap-2 text-sm">
-                  <CheckCircle2
-                    className="mt-0.5 h-4 w-4 shrink-0 text-primary"
-                    aria-hidden="true"
-                  />
-                  <span className="text-foreground/85">{item}</span>
-                </li>
-              ))}
-            </ul>
-            <p className="mt-8 border-l-2 border-highlight pl-4 text-sm font-medium text-foreground/85">
-              Solicite o histórico de manutenção do veículo antes de fechar.
-            </p>
-          </div>
-          <div className="lg:col-span-6 order-1 lg:order-2">
-            <div className="overflow-hidden border border-border">
+        <section
+          id="manutencao"
+          className="section-black border-b border-border"
+          aria-labelledby="maintenance-title"
+        >
+          <div className="container-page grid items-center gap-10 py-14 md:py-20 lg:grid-cols-2 lg:gap-16">
+            <div>
+              <h2
+                id="maintenance-title"
+                className="text-3xl font-extrabold leading-tight md:text-4xl"
+              >
+                A manutenção faz parte do serviço.
+              </h2>
+              <p className="mt-4 leading-relaxed text-muted-foreground">
+                Cuidamos da frota antes de ela chegar à sua rota. As revisões, vistorias e
+                documentos são acompanhados pela equipe interna e podem ser consultados antes da
+                locação ou compra.
+              </p>
+              <ul className="mt-6 grid gap-4 sm:grid-cols-2">
+                {[
+                  "Manutenção preventiva mensal",
+                  "Vistoria DETRAN atualizada",
+                  "Motoristas com curso de transporte escolar",
+                  "Cintos e itens de segurança revisados",
+                ].map((item) => (
+                  <li key={item} className="flex items-start gap-2 text-sm leading-relaxed">
+                    <CheckCircle2
+                      className="mt-0.5 h-4 w-4 shrink-0 text-primary"
+                      aria-hidden="true"
+                    />
+                    <span className="text-foreground/85">{item}</span>
+                  </li>
+                ))}
+              </ul>
+              <a
+                href={waLink(
+                  "Olá! Quero consultar o histórico de manutenção e a documentação de um veículo.",
+                )}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="mt-7 inline-flex min-h-11 items-center gap-2 text-sm font-semibold underline underline-offset-4"
+              >
+                Consultar histórico de manutenção{" "}
+                <ArrowRight className="h-4 w-4" aria-hidden="true" />
+              </a>
+            </div>
+            <figure>
               <img
                 src={maintenance}
-                alt="Mecânico inspecionando o motor de um ônibus escolar em oficina"
+                alt="Ilustração de inspeção do motor de um ônibus em oficina"
                 loading="lazy"
                 width={1200}
                 height={900}
-                className="h-full w-full object-cover"
+                className="aspect-[4/3] w-full object-cover"
               />
-            </div>
+              <figcaption className="mt-3 text-xs text-muted-foreground">
+                Imagem ilustrativa. Solicite os registros do veículo de seu interesse.
+              </figcaption>
+            </figure>
           </div>
-        </div>
-      </section>
+        </section>
 
-      {/* Contact CTA */}
-      <section id="contato" className="bg-primary text-primary-foreground">
-        <div className="container-page grid gap-10 py-16 md:py-20 lg:grid-cols-12">
-          <div className="lg:col-span-7">
-            <h2 className="text-3xl md:text-4xl font-extrabold leading-tight">
-              Fale com quem opera a frota.
-            </h2>
-            <p className="mt-4 max-w-xl text-primary-foreground/80 leading-relaxed">
-              Envie sua demanda pelo WhatsApp com a rota, o número de passageiros e o período.
-              Retornamos com disponibilidade, documentação e valores.
-            </p>
-            <div className="mt-8 flex flex-wrap gap-3">
+        <section id="contato" className="section-navy" aria-labelledby="contact-title">
+          <div className="container-page grid gap-10 py-14 md:py-20 lg:grid-cols-12">
+            <div className="lg:col-span-7">
+              <h2
+                id="contact-title"
+                className="max-w-xl text-4xl font-extrabold leading-tight md:text-5xl"
+              >
+                Vamos conversar sobre a sua rota?
+              </h2>
+              <p className="mt-4 max-w-xl leading-relaxed text-muted-foreground">
+                Envie o tipo de veículo, a rota, o número de passageiros e o período. Nossa equipe
+                retorna com disponibilidade, documentação e valores.
+              </p>
               <a
                 href={waLink(contactMsg)}
                 target="_blank"
                 rel="noopener noreferrer"
-                className="inline-flex items-center gap-2 rounded-md bg-whatsapp px-5 py-3 text-sm font-semibold text-whatsapp-foreground transition-colors hover:brightness-95"
+                className="button-whatsapp mt-7"
               >
-                <WhatsAppIcon className="h-4 w-4" />
-                Falar no WhatsApp
+                <WhatsAppIcon className="h-5 w-5" />
+                Pedir uma proposta
+              </a>
+              <p className="mt-4 text-sm text-muted-foreground">WhatsApp: {WHATSAPP_LABEL}</p>
+              <a
+                href={`tel:+${WHATSAPP_NUMBER}`}
+                className="mt-2 inline-flex min-h-11 items-center gap-2 text-sm font-semibold underline underline-offset-4"
+              >
+                <Phone className="h-4 w-4" aria-hidden="true" /> Prefere ligar? {WHATSAPP_LABEL}
               </a>
             </div>
+            <div className="border-t border-border pt-6 lg:col-span-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
+              <h3 className="text-lg font-bold">Atendimento</h3>
+              <dl className="mt-4 divide-y divide-border border-y border-border text-sm">
+                <div className="py-4">
+                  <dt className="text-muted-foreground">Região atendida</dt>
+                  <dd className="mt-2 flex items-start gap-2">
+                    <MapPin className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    Grande São Paulo e região metropolitana
+                  </dd>
+                </div>
+                <div className="py-4">
+                  <dt className="text-muted-foreground">Horário</dt>
+                  <dd className="mt-2 flex items-start gap-2">
+                    <Clock className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    Segunda a sábado, 7h às 19h
+                  </dd>
+                </div>
+                <div className="py-4">
+                  <dt className="text-muted-foreground">Documentação</dt>
+                  <dd className="mt-2 flex items-start gap-2">
+                    <FileCheck className="h-4 w-4 shrink-0" aria-hidden="true" />
+                    Notas fiscais e contratos formais
+                  </dd>
+                </div>
+              </dl>
+            </div>
           </div>
-          <div className="border-t border-primary-foreground/20 pt-6 lg:col-span-5 lg:border-l lg:border-t-0 lg:pl-8 lg:pt-0">
-            <h3 className="text-base font-bold">Atendimento</h3>
-            <dl className="mt-4 text-sm text-primary-foreground/85">
-              <div className="border-b border-primary-foreground/15 py-3 first:border-t">
-                <dt className="text-primary-foreground/60">Onde</dt>
-                <dd className="mt-1 flex items-start gap-2">
-                  <MapPin className="mt-0.5 h-4 w-4 shrink-0 text-highlight" aria-hidden="true" />
-                  Grande São Paulo e região metropolitana
-                </dd>
-              </div>
-              <div className="border-b border-primary-foreground/15 py-3">
-                <dt className="text-primary-foreground/60">Horário</dt>
-                <dd className="mt-1 flex items-start gap-2">
-                  <Clock className="mt-0.5 h-4 w-4 shrink-0 text-highlight" aria-hidden="true" />
-                  Segunda a sábado, 7h às 19h
-                </dd>
-              </div>
-              <div className="border-b border-primary-foreground/15 py-3">
-                <dt className="text-primary-foreground/60">Documentos</dt>
-                <dd className="mt-1 flex items-start gap-2">
-                  <FileCheck
-                    className="mt-0.5 h-4 w-4 shrink-0 text-highlight"
-                    aria-hidden="true"
-                  />
-                  Notas fiscais e contratos formais
-                </dd>
-              </div>
-            </dl>
-          </div>
-        </div>
-      </section>
+        </section>
+      </main>
 
-      {/* Footer */}
-      <footer className="border-t border-border bg-background">
-        <div className="container-page flex flex-col gap-6 py-10 md:flex-row md:items-center md:justify-between">
-          <div className="flex items-center gap-3">
-            <img src={logo} alt="01 Transportes" className="h-7 w-auto" />
-          </div>
+      <footer className="section-black border-t border-border">
+        <div className="container-page flex flex-col gap-5 py-8 lg:flex-row lg:items-center lg:justify-between">
+          <img
+            src={logo}
+            alt="01 Transportes"
+            width={899}
+            height={126}
+            className="h-auto w-52 invert mix-blend-screen"
+          />
           <p className="text-xs text-muted-foreground">
             © {new Date().getFullYear()} 01 Transportes. Locação e venda de veículos.
           </p>
-          <div className="flex items-center gap-4 text-xs text-muted-foreground">
-            <a href="#servicos" className="hover:text-foreground">
-              Serviços
+          <nav
+            aria-label="Navegação do rodapé"
+            className="flex flex-wrap items-center gap-x-5 text-xs text-muted-foreground"
+          >
+            <a href="#frota" className="inline-flex min-h-11 items-center hover:text-foreground">
+              Catálogo
             </a>
-            <a href="#frota" className="hover:text-foreground">
-              Frota
+            <a
+              href="#manutencao"
+              className="inline-flex min-h-11 items-center hover:text-foreground"
+            >
+              Manutenção
             </a>
-            <a href="#contato" className="hover:text-foreground">
-              Contato
-            </a>
-          </div>
+            <Link
+              to="/admin"
+              className="inline-flex min-h-11 items-center gap-2 hover:text-foreground"
+            >
+              <LockKeyhole className="h-3.5 w-3.5" aria-hidden="true" />
+              Admin
+            </Link>
+          </nav>
         </div>
       </footer>
     </div>

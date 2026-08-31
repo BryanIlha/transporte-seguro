@@ -599,12 +599,12 @@ function AdminPage() {
       plate: plate || null,
       renavam: renavam || null,
       chassi: chassi || null,
-      manufacturedYear: manufacturedYear.value,
-      passengerCapacity: passengerCapacity.value,
-      mileageKm: mileageKm.value,
+      manufacturedYear: manufacturedYear.value ?? null,
+      passengerCapacity: passengerCapacity.value ?? null,
+      mileageKm: mileageKm.value ?? null,
       airConditioned: form.airConditioned,
       location: form.location.trim() || null,
-      priceCents: priceCents.value,
+      priceCents: priceCents.value ?? null,
       description: form.description.trim(),
       features: form.features
         .split("\n")

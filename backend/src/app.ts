@@ -138,7 +138,7 @@ function serializeDocument(document: VehicleDocument) {
   };
 }
 
-function serializeVehicle(
+export function serializeVehicle(
   vehicle: typeof vehicles.$inferSelect,
   images: Array<typeof vehicleImages.$inferSelect>,
   documents?: Array<typeof vehicleDocuments.$inferSelect>,
@@ -157,9 +157,11 @@ function serializeVehicle(
     manufacturedYear: vehicle.manufacturedYear,
     passengerCapacity: vehicle.passengerCapacity,
     mileageKm: vehicle.mileageKm,
-    plate: vehicle.plate,
-    renavam: vehicle.renavam,
-    chassi: vehicle.chassi,
+    // Documents are loaded only by authenticated admin routes. Keep the nullable
+    // response contract without exposing vehicle identifiers in the public catalog.
+    plate: documents ? vehicle.plate : null,
+    renavam: documents ? vehicle.renavam : null,
+    chassi: documents ? vehicle.chassi : null,
     airConditioned: vehicle.airConditioned,
     location: vehicle.location,
     priceCents: vehicle.priceCents,

@@ -72,7 +72,7 @@
   --highlight-foreground: oklch(0.16 0.01 250);
 
   /* WhatsApp green */
-  --whatsapp: oklch(0.66 0.16 148);
+  --whatsapp: oklch(0.49 0.12 148);
   --whatsapp-foreground: oklch(0.985 0 0);
 
   --destructive: oklch(0.58 0.22 27);
@@ -81,6 +81,30 @@
   --border: oklch(0.9 0.008 90);
   --input: oklch(0.9 0.008 90);
   --ring: oklch(0.3 0.05 258);
+}
+
+/* Local section palettes keep the catalog and admin on their light theme. */
+.section-navy,
+.section-black {
+  --foreground: oklch(0.985 0 0);
+  --primary: oklch(0.985 0 0);
+  --primary-foreground: oklch(0.24 0.05 258);
+  --muted-foreground: oklch(0.82 0.015 258);
+  --border: oklch(0.42 0.025 258);
+  --ring: oklch(0.86 0.17 92);
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+.section-navy {
+  --background: oklch(0.24 0.05 258);
+}
+
+.section-black {
+  --background: oklch(0.14 0 0);
+  --primary-foreground: oklch(0.14 0 0);
+  --muted-foreground: oklch(0.8 0 0);
+  --border: oklch(0.34 0 0);
 }
 
 @layer base {
@@ -110,7 +134,7 @@
   }
 
   :focus-visible {
-    outline: 2px solid var(--color-highlight);
+    outline: 2px solid var(--color-ring);
     outline-offset: 3px;
   }
 
@@ -121,6 +145,293 @@
 
   textarea {
     resize: vertical;
+  }
+}
+
+.site-home h1,
+.site-home h2 {
+  text-wrap: balance;
+}
+
+.site-home section {
+  scroll-margin-top: 1.5rem;
+}
+
+.site-home ::selection {
+  color: var(--highlight-foreground);
+  background: var(--highlight);
+}
+
+.skip-link {
+  position: fixed;
+  top: 0.75rem;
+  left: 1rem;
+  z-index: 50;
+  padding: 0.75rem 1rem;
+  color: var(--primary-foreground);
+  background: var(--primary);
+  transform: translateY(-200%);
+}
+
+.skip-link:focus {
+  transform: translateY(0);
+}
+
+.site-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding-block: 1rem 0.5rem;
+}
+
+.site-brand {
+  width: min(16rem, calc(100% - 4rem));
+}
+
+.site-nav {
+  order: 3;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  width: 100%;
+  border-top: 1px solid var(--border);
+  font-size: 0.8125rem;
+  font-weight: 500;
+}
+
+.site-nav a {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 2.75rem;
+  padding-inline: 0.25rem;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  transition: color 150ms ease;
+}
+
+.site-nav a:hover {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 0.3em;
+}
+
+.button-primary,
+.button-outline,
+.button-whatsapp {
+  display: inline-flex;
+  min-height: 2.875rem;
+  align-items: center;
+  justify-content: center;
+  gap: 0.625rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius);
+  padding: 0.75rem 1.125rem;
+  font-size: 0.875rem;
+  font-weight: 600;
+  line-height: 1.4;
+  cursor: pointer;
+  transition:
+    background-color 150ms ease,
+    color 150ms ease,
+    border-color 150ms ease;
+}
+
+.button-primary {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.button-primary:hover {
+  background: color-mix(in oklch, var(--primary) 88%, var(--background));
+}
+
+.button-outline {
+  border-color: currentColor;
+  color: var(--primary);
+}
+
+.button-outline:hover {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  border-color: var(--primary);
+}
+
+.button-whatsapp {
+  background: var(--whatsapp);
+  color: var(--whatsapp-foreground);
+}
+
+.button-whatsapp:hover {
+  background: color-mix(in oklch, var(--whatsapp) 88%, black);
+}
+
+.button-primary:disabled {
+  cursor: wait;
+  opacity: 0.65;
+}
+
+.header-contact {
+  padding-inline: 0.75rem;
+}
+
+.catalog-state {
+  display: flex;
+  min-height: 15rem;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  margin-top: 2rem;
+  padding: 2rem 1.25rem;
+  border-block: 1px solid var(--border);
+  background: var(--surface);
+  text-align: center;
+}
+
+.customization-form {
+  --background: oklch(1 0 0);
+  --foreground: oklch(0.16 0.01 250);
+  --primary: oklch(0.24 0.05 258);
+  --primary-foreground: oklch(0.985 0 0);
+  --muted-foreground: oklch(0.46 0.015 258);
+  --border: oklch(0.9 0.008 90);
+  --ring: oklch(0.3 0.05 258);
+  padding: 1.5rem;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.custom-input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid oklch(0.6 0.025 258);
+  border-radius: var(--radius);
+  background: var(--background);
+  color: var(--foreground);
+  padding: 0.75rem;
+  font-size: 1rem;
+  font-weight: 400;
+  color-scheme: light;
+  caret-color: var(--primary);
+}
+
+.custom-input::placeholder {
+  color: var(--muted-foreground);
+  opacity: 1;
+}
+
+.hero-layout {
+  display: grid;
+  align-items: center;
+  gap: 2rem;
+  padding-block: 3rem;
+}
+
+.hero-title {
+  max-width: 12ch;
+  font-size: clamp(2.5rem, 5.6vw, 4.75rem);
+  line-height: 1.04;
+  letter-spacing: -0.035em;
+}
+
+.hero-image {
+  aspect-ratio: 4 / 3;
+}
+
+.customization-layout {
+  display: grid;
+  gap: 2rem;
+  padding-block: 3.5rem;
+}
+
+.customization-title {
+  max-width: 15ch;
+  font-size: clamp(2rem, 4.2vw, 3.5rem);
+  line-height: 1.08;
+}
+
+@media (min-width: 768px) {
+  .site-brand {
+    width: 19.625rem;
+  }
+  .hero-layout {
+    padding-block: 4rem;
+  }
+  .hero-title {
+    max-width: 17ch;
+    font-size: 3.5rem;
+  }
+  .customization-layout {
+    padding-block: 5rem;
+  }
+  .customization-form {
+    padding: 2rem;
+  }
+}
+
+@media (min-width: 1024px) {
+  .hero-title {
+    max-width: 12ch;
+    font-size: clamp(3.5rem, 5.6vw, 4.75rem);
+  }
+  .hero-layout {
+    grid-template-columns: 1.15fr 1fr;
+    gap: 3rem;
+  }
+  .hero-image {
+    aspect-ratio: 1 / 1;
+  }
+  .customization-layout {
+    grid-template-columns: 0.85fr 1.15fr;
+    align-items: start;
+    gap: 4rem;
+  }
+  .site-header {
+    flex-wrap: nowrap;
+    gap: 1.5rem;
+    padding-block: 1.25rem;
+  }
+  .site-nav {
+    order: 0;
+    display: flex;
+    width: auto;
+    gap: 1.25rem;
+    border: 0;
+    font-size: 0.875rem;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .hero-vehicle {
+    animation: vehicle-focus 650ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  }
+  .catalog-loading {
+    animation: loading-turn 1.2s linear infinite;
+  }
+}
+
+@keyframes vehicle-focus {
+  from {
+    clip-path: inset(0 6% 0 0);
+    opacity: 0.75;
+  }
+  to {
+    clip-path: inset(0);
+    opacity: 1;
+  }
+}
+
+@keyframes loading-turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
   }
 }
 

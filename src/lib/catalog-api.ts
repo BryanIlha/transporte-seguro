@@ -80,7 +80,9 @@ function mapDocument(document: Record<string, unknown>): CatalogVehicleDocument 
   };
 }
 
-function mapVehicle(vehicle: Record<string, unknown>): CatalogVehicle {
+function mapVehicle(vehicle: Record<string, unknown>): CatalogVehicle & {
+  catalog_vehicle_images: CatalogVehicleImage[];
+} {
   return {
     id: String(vehicle.id),
     slug: String(vehicle.slug),
@@ -115,8 +117,10 @@ function mapVehicle(vehicle: Record<string, unknown>): CatalogVehicle {
   };
 }
 
-export async function getCatalogVehicles() {
-  const result = await request<{ vehicles: Record<string, unknown>[] }>("/v1/catalog/vehicles");
+export async function getCatalogVehicles(signal?: AbortSignal) {
+  const result = await request<{ vehicles: Record<string, unknown>[] }>("/v1/catalog/vehicles", {
+    signal,
+  });
   return result.vehicles.map(mapVehicle);
 }
 
@@ -245,7 +249,7 @@ export async function uploadCrlv(
   hash: string,
   formValues: { plate: string; renavam: string; chassi: string },
   status: string,
-  fingerprint: string,
+  fingerprint: string | null,
 ) {
   const form = new FormData();
   const confirmedData = {
@@ -256,7 +260,7 @@ export async function uploadCrlv(
   };
   form.append("file", file, file.name);
   form.append("sha256", hash);
-  form.append("fingerprint", fingerprint);
+  if (fingerprint) form.append("fingerprint", fingerprint);
   form.append("metadata", JSON.stringify(result.data));
   form.append("confirmedData", JSON.stringify(confirmedData));
   form.append("pages", String(result.paginas));

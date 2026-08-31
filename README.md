@@ -11,6 +11,22 @@ npm install
 npm run dev
 ```
 
+O catálogo também exige a API e o Postgres dedicado em execução. No desenvolvimento,
+o servidor web encaminha `/api` para `http://127.0.0.1:3001` por padrão. Para outro
+endereço, inicie com `BACKEND_DEV_URL=http://host:porta npm run dev`.
+`BACKEND_INTERNAL_URL`, quando definido, tem prioridade. Em produção ele é obrigatório.
+
+Em outro terminal, com as variáveis do backend configuradas no ambiente, execute:
+
+```sh
+npm run dev --workspace @transporte-seguro/api
+```
+
+Use apenas o banco dedicado deste projeto e as rotinas de identidade/migration existentes.
+Não reutilize as credenciais Supabase legadas. Sem API configurada ou acessível,
+`/api` responde com HTTP 503 em JSON e a página oferece nova tentativa e contato;
+isso não significa que o estoque esteja vazio.
+
 Para validar o site e a API:
 
 ```sh
@@ -43,7 +59,7 @@ Use `.env.example` como referência. No serviço da API, configure:
 No serviço web, configure:
 
 - `BACKEND_INTERNAL_URL` apontando para o serviço privado da API
-- `VITE_WHATSAPP_NUMBER` com o número real em formato internacional
+- O WhatsApp público está definido em `src/lib/contact.ts`: `5551996015671`.
 
 O processo da API executa o preflight de identidade e a migration antes de iniciar. Se o banco conectado não corresponder ao nome esperado ou não tiver a identidade `transporte-seguro`, o processo encerra sem alterar dados.
 
