@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "node dist/main.js",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json && cp src/pdf/crlv-worker.mjs dist/pdf/crlv-worker.mjs",
     "db:migrate": "tsx src/db/migrate.ts",
     "admin:create": "tsx src/cli/create-admin.ts",
     "admin:delete": "tsx src/cli/delete-admin.ts",
@@ -19,6 +19,7 @@
     "drizzle-orm": "^0.44.2",
     "fastify": "^5.4.0",
     "file-type": "^20.5.0",
+    "pdfjs-dist": "6.2.108",
     "postgres": "^3.4.7",
     "zod": "^3.24.2"
   },

@@ -30,6 +30,7 @@ import {
   type ApiPlacasStatus,
 } from "./enrichment/apiplacas.js";
 import { FileStore } from "./storage/file-store.js";
+import { CrlvReadError, readCrlvPages } from "./pdf/read-crlv.js";
 
 const SESSION_COOKIE = "ts_admin_session";
 const SESSION_HOURS = 12;
@@ -297,6 +298,38 @@ export function buildApp(options: { db: Database; fileStore?: FileStore }): Fast
       return reply.code(503).send({ status: "error", error: errorMessage(error) });
     }
   });
+
+  app.post(
+    "/v1/admin/documents/crlv/extract",
+    {
+      preHandler: requireAdmin,
+      config: { rateLimit: { max: 12, timeWindow: "1 minute" } },
+    },
+    async (request, reply) => {
+      reply.header("cache-control", "no-store");
+      const file = await request.file();
+      if (!file) return reply.code(400).send({ error: "Selecione um CRLV em PDF." });
+      const buffer = await file.toBuffer();
+      if (
+        buffer.subarray(0, 5).toString() !== "%PDF-" ||
+        (await fileTypeFromBuffer(buffer))?.mime !== "application/pdf"
+      ) {
+        return reply
+          .code(400)
+          .send({ error: "O arquivo não é um PDF válido. Baixe o CRLV novamente." });
+      }
+      try {
+        const pages = await readCrlvPages(buffer);
+        return { pages, sha256: crypto.createHash("sha256").update(buffer).digest("hex") };
+      } catch (error) {
+        const failure = error instanceof CrlvReadError ? error : new CrlvReadError("UNREADABLE");
+        request.log.warn({ code: failure.code }, "CRLV extraction failed");
+        return reply
+          .code(failure.code === "BUSY" ? 503 : 422)
+          .send({ error: failure.message, code: failure.code });
+      }
+    },
+  );
 
   app.post(
     "/v1/auth/session",

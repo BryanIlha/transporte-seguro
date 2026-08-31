@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   deleteImage,
+  extractCrlv,
   getCatalogVehicles,
   logout,
   mapAdminSession,
@@ -10,6 +11,28 @@ import Fastify from "fastify";
 import { parseCrlvText } from "./crlv-parser";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("extração autenticada no servidor", () => {
+  it("envia o PDF para a API e interpreta o texto retornado sem carregar PDF.js", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          pages: [[{ str: "PLACA ABC1D23", transform: [1, 0, 0, 1, 40, 700], width: 100 }]],
+          sha256: "a".repeat(64),
+        }),
+      ),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await extractCrlv(
+      new File(["%PDF-test"], "teste.pdf", { type: "application/pdf" }),
+    );
+    expect(result.hash).toBe("a".repeat(64));
+    expect(result.result.texto_extraido).toContain("ABC1D23");
+    expect(fetchMock.mock.calls[0][0]).toBe("/api/v1/admin/documents/crlv/extract");
+    expect(fetchMock.mock.calls[0][1].body).toBeInstanceOf(FormData);
+    expect(fetchMock.mock.calls[0][1].credentials).toBe("include");
+  });
+});
 
 describe("operações sem corpo JSON", () => {
   it.each([

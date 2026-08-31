@@ -1,4 +1,6 @@
 import type { CrlvParseResult } from "./crlv-parser";
+import { parseCrlvText } from "./crlv-parser";
+import { layoutTextFromItems, simpleTextFromItems, type TextItemLike } from "./pdf-text-layout";
 import type {
   Availability,
   CatalogVehicle,
@@ -9,6 +11,33 @@ import type {
 } from "./catalog";
 
 const API_BASE = "/api";
+
+export async function extractCrlv(file: File) {
+  const body = new FormData();
+  body.append("file", file, file.name);
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 25000);
+  try {
+    const payload = await request<{ pages: TextItemLike[][]; sha256: string }>(
+      "/v1/admin/documents/crlv/extract",
+      { method: "POST", body, signal: controller.signal },
+    );
+    const result = parseCrlvText(
+      payload.pages.map(layoutTextFromItems).join("\n"),
+      payload.pages.map(simpleTextFromItems).join("\n"),
+      payload.pages.length,
+    );
+    return { result, hash: payload.sha256 };
+  } catch (error) {
+    if (controller.signal.aborted)
+      throw new Error(
+        "A leitura demorou mais que o esperado. Confira sua conexão e tente novamente.",
+      );
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
 
 type ApiError = { error?: string };
 export type AdminSession = { user: { id: string; email: string } };

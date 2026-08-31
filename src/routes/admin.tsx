@@ -18,7 +18,6 @@ import {
 } from "lucide-react";
 
 import { PendingPhotos } from "@/components/pending-photos";
-import { crlvReadError } from "@/lib/crlv-errors";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -47,6 +46,7 @@ import {
 } from "@/lib/crlv-parser";
 import {
   createVehicle,
+  extractCrlv,
   deleteDocument,
   deleteImage,
   deleteVehicle as deleteVehicleApi,
@@ -251,17 +251,6 @@ const emptyCrlvImport = (): CrlvImportState => ({
   status: "EMPTY",
   error: "",
 });
-
-function sha256File(file: File) {
-  return file
-    .arrayBuffer()
-    .then((bytes) => crypto.subtle.digest("SHA-256", bytes))
-    .then((digest) =>
-      Array.from(new Uint8Array(digest))
-        .map((value) => value.toString(16).padStart(2, "0"))
-        .join(""),
-    );
-}
 
 function validateCrlvFile(file: File) {
   if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
@@ -470,11 +459,7 @@ function AdminPage() {
     setCrlvImport({ file, result: null, hash: null, status: "PROCESSANDO", error: "" });
 
     try {
-      const [{ extractCrlvPdf }, hash] = await Promise.all([
-        import("@/lib/crlv-pdf"),
-        sha256File(file),
-      ]);
-      const result = await extractCrlvPdf(file);
+      const { result, hash } = await extractCrlv(file);
       if (sequence !== crlvSequence.current) return;
       const status = result.data.status_extracao === "ok" ? "PRONTO" : "REVISAR";
       setCrlvImport({ file, result, hash, status, error: result.data.erro_extracao ?? "" });
@@ -487,7 +472,8 @@ function AdminPage() {
         result: null,
         hash: null,
         status: "ERRO",
-        error: crlvReadError(error),
+        error:
+          error instanceof Error ? error.message : "Não foi possível ler o CRLV. Tente novamente.",
       });
     }
   }
@@ -959,7 +945,7 @@ function AdminPage() {
                       <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
                         {form.id
                           ? "Confira o documento atual ou anexe uma nova versão para atualizar os dados do veículo."
-                          : "Anexe o CRLV para preencher os dados do veículo. A leitura do PDF funciona sem consulta externa por placa."}
+                          : "Anexe o CRLV para preencher os dados do veículo. O PDF é lido com segurança no servidor, sem consulta externa por placa."}
                       </p>
                     </div>
                   </div>

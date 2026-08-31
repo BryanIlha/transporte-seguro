@@ -42,7 +42,7 @@ O site TanStack Start (`transporte-seguro-web`) consome a API Fastify (`transpor
 
 O catálogo começa vazio. O painel protegido está em `/admin` e permite cadastrar, editar, publicar e excluir veículos definitivamente. Fotos são públicas apenas por endpoint controlado; CRLVs ficam privados e exigem sessão de administrador.
 
-O CRLV é opcional. Quando anexado, a leitura local do PDF preenche placa, RENAVAM, chassi, marca, modelo, ano e lotação, sem depender da APIPlacas. Campos já preenchidos pelo administrador são preservados para conferência. Ao salvar, a API armazena o documento privado e registra hash/fingerprint para evitar duplicidade.
+O CRLV é opcional. Quando anexado, a leitura autenticada do PDF na API preenche placa, RENAVAM, chassi, marca, modelo, ano e lotação, sem depender da APIPlacas. Campos já preenchidos pelo administrador são preservados para conferência. A extração usa `/v1/admin/documents/crlv/extract`, não persiste o arquivo antes de salvar e executa em worker isolado com limite de 10 MB, 5 páginas, 15 segundos e duas leituras simultâneas. Ao salvar, a API armazena o documento privado e registra hash/fingerprint para evitar duplicidade.
 
 ## Configuração do backend
 
