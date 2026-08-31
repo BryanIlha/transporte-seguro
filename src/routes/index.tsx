@@ -23,6 +23,7 @@ import van from "@/assets/vehicle-van.jpg";
 import { WHATSAPP_LABEL, WHATSAPP_NUMBER, whatsappLink as waLink } from "@/lib/contact";
 import { availabilityLabel, operationModeLabel, type CatalogVehicle } from "@/lib/catalog";
 import { getCatalogVehicles } from "@/lib/catalog-api";
+import { VehicleGallery } from "@/components/vehicle-gallery";
 
 export const Route = createFileRoute("/")({
   component: Home,
@@ -56,8 +57,7 @@ type Vehicle = {
   airConditioned: boolean;
   location: string | null;
   year: number | null;
-  image: string | null;
-  alt: string;
+  photos: { src: string; alt: string }[];
 };
 
 function getCatalogFallbackFeatures(vehicle: CatalogVehicle) {
@@ -84,7 +84,6 @@ function toDisplayVehicle(vehicle: CatalogVehicle): Vehicle {
   const images = [...(vehicle.catalog_vehicle_images ?? [])].sort(
     (first, second) => first.sort_order - second.sort_order,
   );
-  const primaryImage = images[0];
   const features =
     vehicle.features.length > 0 ? vehicle.features : getCatalogFallbackFeatures(vehicle);
 
@@ -103,8 +102,7 @@ function toDisplayVehicle(vehicle: CatalogVehicle): Vehicle {
     airConditioned: vehicle.air_conditioned,
     location: vehicle.location,
     year: vehicle.manufactured_year,
-    image: primaryImage?.path ?? null,
-    alt: primaryImage?.alt_text ?? vehicle.title,
+    photos: images.map((image) => ({ src: image.path, alt: image.alt_text || vehicle.title })),
   };
 }
 
@@ -336,29 +334,7 @@ function FleetSection() {
                 key={v.id}
                 className="flex flex-col overflow-hidden border border-border bg-card"
               >
-                <div className="aspect-[4/3] overflow-hidden bg-muted">
-                  {v.image ? (
-                    <img
-                      src={v.image}
-                      alt={v.alt}
-                      loading="lazy"
-                      width={1200}
-                      height={900}
-                      className="h-full w-full object-cover"
-                      onError={(event) => {
-                        event.currentTarget.style.display = "none";
-                        event.currentTarget.nextElementSibling?.removeAttribute("hidden");
-                      }}
-                    />
-                  ) : null}
-                  <div
-                    hidden={Boolean(v.image)}
-                    className="h-full place-content-center text-center text-sm text-muted-foreground"
-                  >
-                    <BusFront className="mx-auto mb-3 h-8 w-8" aria-hidden="true" />
-                    Foto em breve
-                  </div>
-                </div>
+                <VehicleGallery photos={v.photos} name={v.name} />
                 <div className="flex flex-1 flex-col p-5">
                   <div className="flex items-start justify-between gap-4">
                     <div>
