@@ -247,7 +247,14 @@ export async function uploadCrlv(
   file: File,
   result: CrlvParseResult,
   hash: string,
-  formValues: { plate: string; renavam: string; chassi: string },
+  formValues: {
+    plate: string;
+    renavam: string;
+    chassi: string;
+    model: string;
+    manufacturedYear: string;
+    passengerCapacity: string;
+  },
   status: string,
   fingerprint: string | null,
 ) {
@@ -257,6 +264,11 @@ export async function uploadCrlv(
     placa: formValues.plate,
     renavam: formValues.renavam || null,
     chassi: formValues.chassi || null,
+    marca_modelo_versao: formValues.model.trim() || null,
+    ano_fabricacao: formValues.manufacturedYear.trim() ? Number(formValues.manufacturedYear) : null,
+    lotacao_pessoas: formValues.passengerCapacity.trim()
+      ? Number(formValues.passengerCapacity)
+      : null,
   };
   form.append("file", file, file.name);
   form.append("sha256", hash);
