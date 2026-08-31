@@ -191,10 +191,10 @@ export function parseCrlvText(
   );
   const potencia = primeiroMatch(/(\d+)\s*CV(?:\/[^\s]+)?\s+([\d.,]+)/, layout, 0);
   const potenciaMatch = potencia?.match(/(\d+)\s*CV(?:\/[^\s]+)?\s+([\d.,]+)/i);
-  const motorMatch =
-    layout.match(
-      /MOTOR.*?CMT.*?EIXOS.*?LOTACAO\s*\n\s*([A-Z0-9]{8,20})\s+([\d.,]+)\s+(\d+)\s+(\d+)P/s,
-    ) ?? simples.match(/\b([A-Z0-9]{8,20})\b\s+([\d.,]+)\s+(\d+)\s+(\d+)P/);
+  // CMT can be masked as *.*. The parallel column can also insert labels
+  // between the heading and values, so match the value row independently.
+  const motorPattern = /\b([A-Z0-9]{8,20})\b\s+([\d.,*]+)\s+(\d+)\s+(\d+)\s*P\b/;
+  const motorMatch = layout.match(motorPattern) ?? simples.match(motorPattern);
   const corCombustivel = blocosDaLinha(
     firstLineAfter(
       linhasLayout,
@@ -216,7 +216,7 @@ export function parseCrlvText(
     firstLineAfter(
       linhasLayout,
       "MARCA / MODELO / VERSAO",
-      (line) => /\bI\/M\.|\bM\.[A-Z]/i.test(line),
+      (line) => /\b(?:I\/)?[A-Z][A-Z0-9.-]*\/[A-Z0-9]/i.test(line),
       8,
     ),
   );
@@ -232,7 +232,7 @@ export function parseCrlvText(
     firstLineAfter(
       linhasLayout,
       "CARROCERIA",
-      (line) => /NAO APLICAVEL|ABERTA|FECHADA|CARROCERIA/i.test(line),
+      (line) => /NAO APLICAVEL|ABERTA|FECHADA|CARROCERIA|TRANSPORTE DE ESCOLARES/i.test(line),
       3,
     ),
   );

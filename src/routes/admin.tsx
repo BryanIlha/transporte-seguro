@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 
 import logo from "@/assets/01transportes-logo.svg";
+import { applyCrlvFields } from "@/lib/crlv-vehicle-fields";
 import {
   availabilityLabel,
   operationModeLabel,
@@ -451,15 +452,8 @@ function AdminPage() {
       const result = await extractCrlvPdf(file);
       const status = result.data.status_extracao === "ok" ? "PRONTO" : "REVISAR";
       setCrlvImport({ file, result, hash, status, error: result.data.erro_extracao ?? "" });
-      setForm((current) => ({
-        ...current,
-        plate: current.plate || normalizeCrlvPlate(result.data.placa),
-        renavam: current.renavam || String(result.data.renavam ?? ""),
-        chassi: current.chassi || String(result.data.chassi ?? ""),
-        manufacturedYear: current.manufacturedYear || String(result.data.ano_fabricacao ?? ""),
-        model: current.model || String(result.data.marca_modelo_versao ?? ""),
-      }));
-      if (result.data.placa) void lookupPlate(normalizeCrlvPlate(result.data.placa));
+      setForm((current) => applyCrlvFields(current, result.data));
+      setPlateLookupError("");
     } catch (error) {
       setCrlvImport({
         file,
@@ -625,15 +619,6 @@ function AdminPage() {
         const created = await createVehicle(payload);
         vehicleId = created.id;
         createdVehicleId = vehicleId;
-      }
-
-      if (vehicleId && plate) {
-        try {
-          const lookup = await lookupVehiclePlate(plate, { vehicleId });
-          setPlateLookup(lookup);
-        } catch {
-          // A missing provider token or temporary provider outage must not block a manual save.
-        }
       }
 
       let crlvUploadError: unknown = null;
@@ -970,7 +955,7 @@ function AdminPage() {
                       <p className="mt-1 max-w-xl text-sm leading-relaxed text-muted-foreground">
                         {form.id
                           ? "Confira o documento atual ou anexe uma nova versão para atualizar os dados do veículo."
-                          : "Anexe o CRLV opcionalmente para extrair e confirmar os identificadores do veículo."}
+                          : "Anexe o CRLV para preencher os dados do veículo. A leitura do PDF funciona sem consulta externa por placa."}
                       </p>
                     </div>
                   </div>
@@ -1131,7 +1116,6 @@ function AdminPage() {
                           plate: normalizeCrlvPlate(event.target.value),
                         }))
                       }
-                      onBlur={() => void lookupPlate(form.plate)}
                       className="h-10 min-w-0 flex-1 border border-input bg-background px-3 font-mono text-sm uppercase"
                       placeholder="ABC1D23"
                       aria-describedby="plate-lookup-help"
@@ -1149,8 +1133,8 @@ function AdminPage() {
                     </button>
                   </div>
                   <span id="plate-lookup-help" className="text-xs text-muted-foreground">
-                    Consulta automática para preencher marca, modelo e ano. O resultado fica salvo
-                    no cadastro.
+                    Consulta externa opcional, acionada apenas pelo botão. Com o CRLV, os dados são
+                    lidos do PDF sem precisar da APIPlacas.
                   </span>
                   {plateLookupError && (
                     <span className="text-xs text-destructive" role="alert">
