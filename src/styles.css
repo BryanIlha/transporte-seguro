@@ -444,3 +444,18 @@
     padding-inline: 2rem;
   }
 }
+
+/* The catalog editor uses larger, consistent controls and a restrained workspace. */
+.admin-workspace input:not([type="checkbox"]):not([type="file"]),
+.admin-workspace select,
+.admin-workspace textarea {
+  min-height: 44px;
+  font-size: 1rem;
+  border-radius: 6px;
+  caret-color: var(--primary);
+}
+.admin-workspace :is(input, select, textarea, button, a):focus-visible {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.admin-workspace fieldset { min-width: 0; }

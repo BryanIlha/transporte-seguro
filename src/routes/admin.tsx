@@ -1,7 +1,9 @@
 import { Link, createFileRoute } from "@tanstack/react-router";
-import { type ChangeEvent, type FormEvent, useEffect, useMemo, useState } from "react";
+import { type ChangeEvent, type FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import {
   BadgeCheck,
+  ExternalLink,
+  Search,
   FileText,
   ImagePlus,
   Info,
@@ -15,6 +17,17 @@ import {
   XCircle,
 } from "lucide-react";
 
+import { PendingPhotos } from "@/components/pending-photos";
+import { crlvReadError } from "@/lib/crlv-errors";
+import {
+  AlertDialog,
+  AlertDialogContent,
+  AlertDialogTitle,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogCancel,
+  AlertDialogAction,
+} from "@/components/ui/alert-dialog";
 import logo from "@/assets/01transportes-logo.svg";
 import { applyCrlvFields } from "@/lib/crlv-vehicle-fields";
 import {
@@ -288,6 +301,15 @@ function AdminPage() {
   const [message, setMessage] = useState("");
   const [editorError, setEditorError] = useState("");
 
+  const [search, setSearch] = useState("");
+  const [confirmation, setConfirmation] = useState<CatalogVehicleImage | "vehicle" | null>(null);
+  const crlvSequence = useRef(0);
+  const filteredVehicles = vehicles.filter((vehicle) =>
+    `${vehicle.title} ${vehicle.plate ?? ""} ${vehicle.category}`
+      .toLocaleLowerCase("pt-BR")
+      .includes(search.toLocaleLowerCase("pt-BR")),
+  );
+
   const currentImages = useMemo(
     () =>
       [...(vehicles.find((vehicle) => vehicle.id === form.id)?.catalog_vehicle_images ?? [])].sort(
@@ -381,6 +403,7 @@ function AdminPage() {
   }
 
   function startNewVehicle() {
+    crlvSequence.current += 1;
     setForm(emptyVehicleForm());
     setNewFiles([]);
     setCrlvImport(emptyCrlvImport());
@@ -391,6 +414,7 @@ function AdminPage() {
   }
 
   function selectVehicle(vehicle: CatalogVehicleWithImages) {
+    crlvSequence.current += 1;
     setForm(formFromVehicle(vehicle));
     setNewFiles([]);
     setCrlvImport(emptyCrlvImport());
@@ -434,6 +458,7 @@ function AdminPage() {
     event.currentTarget.value = "";
     if (!file) return;
 
+    const sequence = ++crlvSequence.current;
     const validationError = validateCrlvFile(file);
     if (validationError) {
       setCrlvImport({ file, result: null, hash: null, status: "ERRO", error: validationError });
@@ -450,17 +475,19 @@ function AdminPage() {
         sha256File(file),
       ]);
       const result = await extractCrlvPdf(file);
+      if (sequence !== crlvSequence.current) return;
       const status = result.data.status_extracao === "ok" ? "PRONTO" : "REVISAR";
       setCrlvImport({ file, result, hash, status, error: result.data.erro_extracao ?? "" });
       setForm((current) => applyCrlvFields(current, result.data));
       setPlateLookupError("");
     } catch (error) {
+      if (sequence !== crlvSequence.current) return;
       setCrlvImport({
         file,
         result: null,
         hash: null,
         status: "ERRO",
-        error: error instanceof Error ? error.message : "Não foi possível ler o CRLV.",
+        error: crlvReadError(error),
       });
     }
   }
@@ -534,6 +561,12 @@ function AdminPage() {
   async function handleSave(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
+    if (crlvImport.status === "PROCESSANDO" || crlvImport.status === "ERRO") {
+      setEditorError(
+        "Aguarde a leitura ou remova o anexo com erro para salvar o cadastro manualmente.",
+      );
+      return;
+    }
     const title = form.title.trim();
     const slug = slugify(form.slug);
     const category = form.category.trim();
@@ -670,8 +703,6 @@ function AdminPage() {
   }
 
   async function removeImage(image: CatalogVehicleImage) {
-    if (!window.confirm("Remover esta foto do veículo?")) return;
-
     setEditorError("");
     try {
       await deleteImage(image.id);
@@ -685,7 +716,6 @@ function AdminPage() {
 
   async function deleteVehicle() {
     if (!form.id) return;
-    if (!window.confirm("Excluir este veículo e todas as suas fotos?")) return;
 
     setEditorError("");
     try {
@@ -717,7 +747,7 @@ function AdminPage() {
   }
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="admin-workspace min-h-screen bg-surface text-foreground">
       <header className="border-b border-border bg-background">
         <div className="container-page flex min-h-16 items-center justify-between gap-4 py-3">
           <Link to="/" className="flex items-center gap-3" aria-label="Voltar para o site">
@@ -726,7 +756,15 @@ function AdminPage() {
               Administrar catálogo
             </span>
           </Link>
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-3">
+            <a
+              href="/#frota"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold hover:bg-surface"
+            >
+              <ExternalLink className="h-4 w-4" aria-hidden="true" /> Ver catálogo
+            </a>
             <span className="hidden text-sm text-muted-foreground md:inline">
               {session.user.email}
             </span>
@@ -745,11 +783,9 @@ function AdminPage() {
       <main className="container-page py-8 md:py-10">
         <div className="flex flex-wrap items-end justify-between gap-4 border-b border-border pb-6">
           <div>
-            <h1 className="text-3xl font-black tracking-tight text-primary md:text-4xl">
-              Veículos
-            </h1>
+            <h1 className="text-2xl font-bold text-primary">Veículos</h1>
             <p className="mt-2 text-sm text-muted-foreground">
-              Organize o catálogo público com dados conferidos e fotos prontas para publicação.
+              Cadastre sua frota e escolha o que aparece no site.
             </p>
           </div>
           <button
@@ -762,8 +798,8 @@ function AdminPage() {
           </button>
         </div>
 
-        <div className="mt-8 grid items-start gap-8 xl:grid-cols-[minmax(260px,0.72fr)_minmax(0,1.28fr)]">
-          <section className="border border-border bg-card">
+        <div className="mt-6 grid items-start gap-6 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <section className="overflow-hidden rounded-lg border border-border bg-card lg:sticky lg:top-6">
             <div className="flex items-center justify-between border-b border-border px-5 py-4">
               <h2 className="font-bold">Catálogo cadastrado</h2>
               <span className="text-sm text-muted-foreground">
@@ -771,13 +807,26 @@ function AdminPage() {
               </span>
             </div>
 
-            {vehicles.length === 0 && !isLoadingVehicles ? (
+            <label className="mx-4 my-3 flex items-center gap-2 rounded-md border border-input px-3">
+              <Search className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+              <input
+                type="search"
+                aria-label="Buscar veículo"
+                placeholder="Nome, placa ou categoria"
+                value={search}
+                onChange={(event) => setSearch(event.target.value)}
+                className="min-w-0 w-full bg-transparent py-3 text-sm outline-none"
+              />
+            </label>
+            {filteredVehicles.length === 0 && !isLoadingVehicles ? (
               <div className="px-5 py-10 text-sm text-muted-foreground">
-                Nenhum veículo cadastrado ainda. Use “Novo veículo” para começar.
+                {search
+                  ? "Nenhum veículo encontrado. Tente outro nome ou placa."
+                  : "Seu catálogo começa aqui. Clique em Novo veículo, anexe o CRLV e adicione as fotos."}
               </div>
             ) : (
               <div>
-                {vehicles.map((vehicle) => {
+                {filteredVehicles.map((vehicle) => {
                   const image = [...(vehicle.catalog_vehicle_images ?? [])].sort(
                     (first, second) => first.sort_order - second.sort_order,
                   )[0];
@@ -793,7 +842,7 @@ function AdminPage() {
                         isSelected ? "bg-surface" : "bg-card"
                       }`}
                     >
-                      <div className="h-14 w-20 shrink-0 overflow-hidden border border-border bg-muted">
+                      <div className="h-12 w-16 shrink-0 overflow-hidden border border-border bg-muted">
                         {imageUrls[image?.path ?? ""] ? (
                           <img
                             src={imageUrls[image?.path ?? ""]}
@@ -811,6 +860,10 @@ function AdminPage() {
                         <span className="block truncate font-semibold">{vehicle.title}</span>
                         <span className="mt-1 block truncate text-sm text-muted-foreground">
                           {vehicle.plate || "Sem placa"} · {vehicle.category}
+                        </span>
+                        <span className="mt-1 block text-xs text-muted-foreground">
+                          {vehicle.published_at ? "Publicado no site" : "Rascunho"} ·{" "}
+                          {vehicle.catalog_vehicle_images.length} fotos
                         </span>
                       </span>
                       {vehicleCrlv &&
@@ -832,7 +885,7 @@ function AdminPage() {
             )}
           </section>
 
-          <section className="border border-border bg-card">
+          <section className="min-w-0 rounded-lg border border-border bg-card">
             <div className="flex items-start justify-between gap-4 border-b border-border px-5 py-5 md:px-6">
               <div>
                 <h2 className="text-lg font-bold text-primary">
@@ -841,7 +894,7 @@ function AdminPage() {
                 <p className="mt-1 text-sm text-muted-foreground">
                   {form.id
                     ? "Atualize os dados do catálogo sem perder o histórico do documento."
-                    : "O CRLV é opcional; quando anexado, ajuda a preencher e conferir a identificação."}
+                    : "Comece pelo CRLV ou preencha os dados manualmente. Depois adicione as fotos e salve."}
                 </p>
               </div>
               {form.id && currentCrlv && (
@@ -862,88 +915,27 @@ function AdminPage() {
               )}
             </div>
 
-            <form onSubmit={handleSave} className="space-y-8 p-5 md:p-6">
-              <fieldset className="grid gap-5 md:grid-cols-2">
-                <legend className="sr-only">Identificação do anúncio</legend>
-                <label className="grid gap-2 md:col-span-2">
-                  <span className="text-sm font-medium">Título</span>
-                  <input
-                    value={form.title}
-                    onChange={(event) => updateTitle(event.target.value)}
-                    className="h-10 border border-input bg-background px-3 text-sm"
-                    placeholder="Ex.: Micro-ônibus escolar 2022"
-                    required
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-medium">URL curta</span>
-                  <input
-                    value={form.slug}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, slug: slugify(event.target.value) }))
-                    }
-                    className="h-10 border border-input bg-background px-3 text-sm"
-                    placeholder="micro-onibus-escolar-2022"
-                    required
-                  />
-                  <span className="text-xs text-muted-foreground">
-                    Usada no identificador do cadastro. É preenchida automaticamente pelo título.
-                  </span>
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-medium">Categoria</span>
-                  <input
-                    value={form.category}
-                    onChange={(event) =>
-                      setForm((current) => ({ ...current, category: event.target.value }))
-                    }
-                    className="h-10 border border-input bg-background px-3 text-sm"
-                    placeholder="Transporte escolar"
-                    required
-                  />
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-medium">Modalidade</span>
-                  <select
-                    value={form.operationMode}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        operationMode: event.target.value as OperationMode,
-                      }))
-                    }
-                    className="h-10 border border-input bg-background px-3 text-sm"
-                  >
-                    {Object.entries(operationModeLabel).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label className="grid gap-2">
-                  <span className="text-sm font-medium">Disponibilidade</span>
-                  <select
-                    value={form.availability}
-                    onChange={(event) =>
-                      setForm((current) => ({
-                        ...current,
-                        availability: event.target.value as Availability,
-                      }))
-                    }
-                    className="h-10 border border-input bg-background px-3 text-sm"
-                  >
-                    {Object.entries(availabilityLabel).map(([value, label]) => (
-                      <option key={value} value={value}>
-                        {label}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-              </fieldset>
-
+            <nav
+              aria-label="Etapas do cadastro"
+              className="flex flex-wrap gap-x-5 gap-y-2 border-b border-border px-5 py-3 text-sm font-semibold md:px-6"
+            >
+              <a href="#admin-documento" className="hover:underline">
+                Documento
+              </a>
+              <a href="#admin-dados" className="hover:underline">
+                Dados do anúncio
+              </a>
+              <a href="#admin-fotos" className="hover:underline">
+                Fotos
+              </a>
+              <a href="#admin-publicacao" className="hover:underline">
+                Publicação
+              </a>
+            </nav>
+            <form id="vehicle-editor" onSubmit={handleSave} className="space-y-8 p-5 md:p-6">
               <section
-                className="border border-border bg-surface/60 p-4 sm:p-5"
+                id="admin-documento"
+                className="scroll-mt-6 rounded-md border border-border bg-surface/60 p-4 sm:p-5"
                 aria-labelledby="crlv-heading"
               >
                 <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
@@ -962,7 +954,7 @@ function AdminPage() {
                       </p>
                     </div>
                   </div>
-                  <label className="inline-flex min-h-11 cursor-pointer items-center justify-center gap-2 border border-border bg-background px-3 py-2 text-sm font-semibold transition-colors hover:bg-card">
+                  <label className="inline-flex min-h-11 shrink-0 cursor-pointer items-center justify-center gap-2 rounded-md bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90">
                     <Upload className="h-4 w-4" aria-hidden="true" />
                     {currentCrlv ? "Substituir CRLV" : "Anexar CRLV"}
                     <input
@@ -1057,6 +1049,21 @@ function AdminPage() {
                   </div>
                 )}
 
+                {crlvImport.file && (
+                  <button
+                    type="button"
+                    className="mt-3 inline-flex min-h-11 items-center gap-2 text-sm font-semibold underline underline-offset-4"
+                    onClick={() => {
+                      crlvSequence.current += 1;
+                      setCrlvImport(emptyCrlvImport());
+                    }}
+                  >
+                    <X className="h-4 w-4" aria-hidden="true" />
+                    {crlvImport.status === "ERRO"
+                      ? "Remover anexo e preencher manualmente"
+                      : "Remover anexo selecionado"}
+                  </button>
+                )}
                 {(crlvImport.file || currentCrlv) && (
                   <div className="mt-4 grid gap-4 sm:grid-cols-2">
                     <label className="grid gap-2">
@@ -1106,8 +1113,92 @@ function AdminPage() {
                 </p>
               </section>
 
+              <fieldset
+                id="admin-dados"
+                className="grid scroll-mt-6 gap-5 border-t border-border pt-6 md:grid-cols-2"
+              >
+                <legend className="text-base font-bold text-primary">Dados do anúncio</legend>
+                <label className="grid gap-2 md:col-span-2">
+                  <span className="text-sm font-medium">Título</span>
+                  <input
+                    value={form.title}
+                    onChange={(event) => updateTitle(event.target.value)}
+                    className="h-10 border border-input bg-background px-3 text-sm"
+                    placeholder="Ex.: Micro-ônibus escolar 2022"
+                    required
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium">URL curta</span>
+                  <input
+                    value={form.slug}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, slug: slugify(event.target.value) }))
+                    }
+                    className="h-10 border border-input bg-background px-3 text-sm"
+                    placeholder="micro-onibus-escolar-2022"
+                    required
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    Usada no identificador do cadastro. É preenchida automaticamente pelo título.
+                  </span>
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium">Categoria</span>
+                  <input
+                    value={form.category}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, category: event.target.value }))
+                    }
+                    className="h-10 border border-input bg-background px-3 text-sm"
+                    placeholder="Transporte escolar"
+                    required
+                  />
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium">Modalidade</span>
+                  <select
+                    value={form.operationMode}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        operationMode: event.target.value as OperationMode,
+                      }))
+                    }
+                    className="h-10 border border-input bg-background px-3 text-sm"
+                  >
+                    {Object.entries(operationModeLabel).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="grid gap-2">
+                  <span className="text-sm font-medium">Disponibilidade</span>
+                  <select
+                    value={form.availability}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        availability: event.target.value as Availability,
+                      }))
+                    }
+                    className="h-10 border border-input bg-background px-3 text-sm"
+                  >
+                    {Object.entries(availabilityLabel).map(([value, label]) => (
+                      <option key={value} value={value}>
+                        {label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </fieldset>
+
               <fieldset className="grid gap-5 border-t border-border pt-6 md:grid-cols-3">
-                <legend className="sr-only">Especificações do veículo</legend>
+                <legend className="text-base font-bold text-primary">
+                  Especificações do veículo
+                </legend>
                 <label className="grid gap-2 md:col-span-3">
                   <span className="text-sm font-medium">Placa</span>
                   <div className="flex flex-col gap-2 sm:flex-row">
@@ -1261,7 +1352,9 @@ function AdminPage() {
               </fieldset>
 
               <fieldset className="grid gap-5 border-t border-border pt-6">
-                <legend className="sr-only">Descrição e diferenciais</legend>
+                <legend className="text-base font-bold text-primary">
+                  Descrição e diferenciais
+                </legend>
                 <label className="grid gap-2">
                   <span className="text-sm font-medium">Descrição</span>
                   <textarea
@@ -1286,7 +1379,10 @@ function AdminPage() {
                 </label>
               </fieldset>
 
-              <fieldset className="grid gap-5 border-t border-border pt-6">
+              <fieldset
+                id="admin-fotos"
+                className="grid scroll-mt-6 gap-5 border-t border-border pt-6"
+              >
                 <legend className="sr-only">Fotos do veículo</legend>
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
@@ -1309,7 +1405,7 @@ function AdminPage() {
                 </div>
 
                 {currentImages.length > 0 && (
-                  <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
                     {currentImages.map((image) => (
                       <div key={image.id} className="border border-border">
                         {imageUrls[image.path] ? (
@@ -1326,7 +1422,7 @@ function AdminPage() {
                         )}
                         <button
                           type="button"
-                          onClick={() => void removeImage(image)}
+                          onClick={() => setConfirmation(image)}
                           className="flex w-full items-center justify-center gap-2 border-t border-border px-3 py-2 text-sm font-semibold text-destructive transition-colors hover:bg-surface"
                         >
                           <Trash2 className="h-4 w-4" />
@@ -1338,33 +1434,32 @@ function AdminPage() {
                 )}
 
                 {newFiles.length > 0 && (
-                  <div className="border border-dashed border-border px-4 py-3 text-sm">
-                    <div className="flex items-start justify-between gap-4">
-                      <div>
-                        <span className="font-semibold">
-                          {newFiles.length} foto(s) pronta(s) para envio
-                        </span>
-                        <ul className="mt-2 space-y-1 text-muted-foreground">
-                          {newFiles.map((file) => (
-                            <li key={`${file.name}-${file.lastModified}`}>{file.name}</li>
-                          ))}
-                        </ul>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => setNewFiles([])}
-                        className="p-1 text-muted-foreground hover:text-foreground"
-                        aria-label="Limpar fotos selecionadas"
-                      >
-                        <X className="h-4 w-4" />
-                      </button>
-                    </div>
-                  </div>
+                  <PendingPhotos
+                    files={newFiles}
+                    hasCover={currentImages.length > 0}
+                    onRemove={(index) =>
+                      setNewFiles((files) => files.filter((_, i) => i !== index))
+                    }
+                  />
+                )}
+                {!currentImages.length && !newFiles.length && (
+                  <p className="rounded-md border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
+                    Adicione fotos para mostrar o veículo no catálogo. Você verá as prévias aqui
+                    antes de salvar.
+                  </p>
                 )}
               </fieldset>
 
-              <fieldset className="grid gap-4 border-t border-border pt-6 md:grid-cols-[1fr_auto]">
-                <legend className="sr-only">Publicação do anúncio</legend>
+              <fieldset
+                id="admin-publicacao"
+                className="grid scroll-mt-6 gap-4 border-t border-border pt-6"
+              >
+                <legend className="text-base font-bold text-primary">Publicação</legend>
+                <p className="text-sm text-muted-foreground">
+                  {form.isPublished
+                    ? "Ao salvar, este veículo ficará visível no catálogo público."
+                    : "Salve como rascunho para revisar antes de publicar."}
+                </p>
                 <div className="flex flex-wrap items-center gap-5 text-sm">
                   <label className="flex items-center gap-3">
                     <input
@@ -1401,41 +1496,75 @@ function AdminPage() {
                     />
                   </label>
                 </div>
-                <div className="flex flex-wrap justify-end gap-3">
-                  {form.id && (
-                    <button
-                      type="button"
-                      onClick={() => void deleteVehicle()}
-                      className="inline-flex items-center gap-2 rounded-md border border-destructive px-4 py-2.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10"
-                    >
-                      <Trash2 className="h-4 w-4" />
-                      Excluir
-                    </button>
-                  )}
-                  <button
-                    type="submit"
-                    disabled={isSaving}
-                    className="inline-flex items-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <Save className="h-4 w-4" />
-                    {isSaving ? "Salvando…" : "Salvar veículo"}
-                  </button>
-                </div>
               </fieldset>
-
-              {(editorError || message) && (
-                <p
-                  className={`text-sm ${editorError ? "text-destructive" : "text-foreground"}`}
-                  role={editorError ? "alert" : "status"}
-                  aria-live="polite"
-                >
-                  {editorError || message}
-                </p>
-              )}
+              <div className="sticky bottom-0 z-10 -mx-5 border-t border-border bg-card px-5 py-4 md:-mx-6 md:px-6">
+                {(editorError || message) && (
+                  <p
+                    className={`mb-3 text-sm ${editorError ? "text-destructive" : "text-foreground"}`}
+                    role={editorError ? "alert" : "status"}
+                  >
+                    {editorError || message}
+                  </p>
+                )}
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <span className="text-sm text-muted-foreground">
+                    {form.isPublished ? "Publicar no catálogo" : "Salvar como rascunho"}
+                  </span>
+                  <div className="flex gap-3">
+                    {form.id && (
+                      <button
+                        type="button"
+                        onClick={() => setConfirmation("vehicle")}
+                        className="inline-flex items-center gap-2 rounded-md border border-destructive px-4 py-2.5 text-sm font-semibold text-destructive transition-colors hover:bg-destructive/10"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                        Excluir
+                      </button>
+                    )}
+                    <button
+                      type="submit"
+                      disabled={isSaving || crlvImport.status === "PROCESSANDO"}
+                      className="inline-flex min-h-11 items-center gap-2 rounded-md bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90 disabled:cursor-not-allowed disabled:opacity-60"
+                    >
+                      <Save className="h-4 w-4" />
+                      {isSaving ? "Salvando…" : "Salvar veículo"}
+                    </button>
+                  </div>
+                </div>
+              </div>
             </form>
           </section>
         </div>
       </main>
+      <AlertDialog
+        open={confirmation !== null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmation(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogTitle>
+            {confirmation === "vehicle" ? "Excluir este veículo?" : "Remover esta foto?"}
+          </AlertDialogTitle>
+          <AlertDialogDescription>
+            {confirmation === "vehicle"
+              ? "O cadastro, as fotos e o CRLV serão excluídos definitivamente. Para apenas retirar do site, desmarque Publicar no site e salve."
+              : "A foto será removida do veículo e do catálogo. As demais fotos serão preservadas."}
+          </AlertDialogDescription>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={() => {
+                if (confirmation === "vehicle") void deleteVehicle();
+                else if (confirmation) void removeImage(confirmation);
+              }}
+            >
+              {confirmation === "vehicle" ? "Excluir definitivamente" : "Remover foto"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
