@@ -3,7 +3,9 @@ import { crlvReadError } from "./crlv-errors";
 
 describe("recuperação de erros do CRLV", () => {
   it("oferece recuperação para uma função ausente sem expor código minificado", () => {
-    const message = crlvReadError(new TypeError("undefined is not a function (near '...e of t...')"));
+    const message = crlvReadError(
+      new TypeError("undefined is not a function (near '...e of t...')"),
+    );
     expect(message).toContain("preencha os dados manualmente");
     expect(message).not.toContain("undefined");
   });

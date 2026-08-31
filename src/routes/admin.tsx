@@ -751,30 +751,38 @@ function AdminPage() {
       <header className="border-b border-border bg-background">
         <div className="container-page flex min-h-16 items-center justify-between gap-4 py-3">
           <Link to="/" className="flex items-center gap-3" aria-label="Voltar para o site">
-            <img src={logo} alt="01 Transportes" className="h-8 w-auto" width={899} height={126} />
-            <span className="hidden border-l border-border pl-3 text-sm font-medium text-muted-foreground sm:inline">
+            <img
+              src={logo}
+              alt="01 Transportes"
+              className="h-auto w-32 sm:w-48"
+              width={899}
+              height={126}
+            />
+            <span className="hidden border-l border-border pl-3 text-sm font-medium text-muted-foreground lg:inline">
               Administrar catálogo
             </span>
           </Link>
           <div className="flex items-center gap-3">
             <a
               href="/#frota"
+              aria-label="Ver catálogo"
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex min-h-11 items-center gap-2 rounded-md border border-border px-3 text-sm font-semibold hover:bg-surface"
             >
               <ExternalLink className="h-4 w-4" aria-hidden="true" /> Ver catálogo
             </a>
-            <span className="hidden text-sm text-muted-foreground md:inline">
+            <span className="hidden text-sm text-muted-foreground xl:inline">
               {session.user.email}
             </span>
             <button
               type="button"
               onClick={handleSignOut}
+              aria-label="Sair"
               className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-sm font-semibold transition-colors hover:bg-surface"
             >
               <LogOut className="h-4 w-4" />
-              Sair
+              <span className="hidden sm:inline">Sair</span>
             </button>
           </div>
         </div>
@@ -863,7 +871,8 @@ function AdminPage() {
                         </span>
                         <span className="mt-1 block text-xs text-muted-foreground">
                           {vehicle.published_at ? "Publicado no site" : "Rascunho"} ·{" "}
-                          {vehicle.catalog_vehicle_images.length} fotos
+                          {vehicle.catalog_vehicle_images.length}{" "}
+                          {vehicle.catalog_vehicle_images.length === 1 ? "foto" : "fotos"}
                         </span>
                       </span>
                       {vehicleCrlv &&

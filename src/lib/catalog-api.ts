@@ -23,7 +23,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     ...init,
     credentials: "include",
     headers: {
-      ...(init.body instanceof FormData ? {} : { "content-type": "application/json" }),
+      ...(typeof init.body === "string" ? { "content-type": "application/json" } : {}),
       ...init.headers,
     },
   });

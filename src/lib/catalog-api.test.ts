@@ -1,8 +1,43 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { getCatalogVehicles, mapAdminSession, uploadCrlv } from "./catalog-api";
+import {
+  deleteImage,
+  getCatalogVehicles,
+  logout,
+  mapAdminSession,
+  uploadCrlv,
+} from "./catalog-api";
+import Fastify from "fastify";
 import { parseCrlvText } from "./crlv-parser";
 
 afterEach(() => vi.unstubAllGlobals());
+
+describe("operações sem corpo JSON", () => {
+  it.each([
+    ["remover foto", () => deleteImage("image-test")],
+    ["sair da conta", () => logout()],
+  ])("permite %s no parser real do Fastify", async (_name, operation) => {
+    const app = Fastify();
+    app.delete("/*", (_request, reply) => reply.code(204).send());
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async (url: string, init: RequestInit) => {
+        const response = await app.inject({
+          method: "DELETE",
+          url,
+          headers: Object.fromEntries(new Headers(init.headers)),
+        });
+        return new Response(response.statusCode === 204 ? null : response.body, {
+          status: response.statusCode,
+        });
+      }),
+    );
+    try {
+      await expect(operation()).resolves.toBeUndefined();
+    } finally {
+      await app.close();
+    }
+  });
+});
 
 describe("envio do CRLV conferido", () => {
   it("preserva a extração para auditoria e envia os valores do formulário como confirmados", async () => {
