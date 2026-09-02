@@ -276,6 +276,17 @@
   padding-inline: 0.75rem;
 }
 
+.header-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.header-admin {
+  width: 2.875rem;
+  padding-inline: 0;
+}
+
 .catalog-state {
   display: flex;
   min-height: 15rem;

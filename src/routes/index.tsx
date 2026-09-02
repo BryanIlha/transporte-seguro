@@ -614,16 +614,26 @@ function Home() {
             <a href="#servicos">Serviços</a>
             <a href="#contato">Contato</a>
           </nav>
-          <a
-            href={waLink(contactMsg)}
-            target="_blank"
-            rel="noopener noreferrer"
-            aria-label="Falar no WhatsApp"
-            className="button-whatsapp header-contact"
-          >
-            <WhatsAppIcon className="h-5 w-5" />
-            <span className="hidden sm:inline">Falar no WhatsApp</span>
-          </a>
+          <div className="header-actions">
+            <Link
+              to="/admin"
+              aria-label="Área administrativa"
+              title="Área administrativa"
+              className="button-outline header-admin"
+            >
+              <LockKeyhole className="h-4 w-4" aria-hidden="true" />
+            </Link>
+            <a
+              href={waLink(contactMsg)}
+              target="_blank"
+              rel="noopener noreferrer"
+              aria-label="Falar no WhatsApp"
+              className="button-whatsapp header-contact"
+            >
+              <WhatsAppIcon className="h-5 w-5" />
+              <span className="hidden sm:inline">Falar no WhatsApp</span>
+            </a>
+          </div>
         </div>
       </header>
 
