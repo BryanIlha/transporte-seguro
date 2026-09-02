@@ -121,7 +121,7 @@ const emptyVehicleForm = (): VehicleForm => ({
   features: "",
   isFeatured: false,
   sortOrder: "0",
-  isPublished: false,
+  isPublished: true,
   publishedAt: null,
 });
 
@@ -631,6 +631,7 @@ function AdminPage() {
       publishedAt: publishedAt,
     };
 
+    const isNewVehicle = !form.id;
     let createdVehicleId: string | null = null;
     try {
       let vehicleId = form.id;
@@ -660,7 +661,13 @@ function AdminPage() {
         uploadError = error;
       }
 
-      setForm((current) => ({ ...current, id: vehicleId, slug, publishedAt }));
+      // A successful creation should return the editor to a blank form. Keeping the newly
+      // created id here makes a second save silently update the previous vehicle instead.
+      setForm(
+        isNewVehicle
+          ? emptyVehicleForm()
+          : (current) => ({ ...current, id: vehicleId, slug, publishedAt }),
+      );
       setNewFiles(uploadError ? newFiles : []);
       if (!crlvUploadError) setCrlvImport(emptyCrlvImport());
       await loadVehicles();
